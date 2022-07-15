@@ -2,14 +2,15 @@
 # encoding: utf-8
 
 import numpy as np
+import torch
+import trimesh
+import networkx as nx
+
+from mayavi import mlab
+
 
 # Build ground truth on the mesh
-
-
 def build_ground_truth(mesh_file):
-    import trimesh
-    import networkx as nx
-
     # Load mesh
     mesh = trimesh.load_mesh(trimesh.interfaces.gmsh.load_gmsh(mesh_file))
 
@@ -38,19 +39,17 @@ def build_ground_truth(mesh_file):
 
     return mesh.vertices, mesh.faces, ground_truth
 
+
 # Plot function on the mesh
-
-
 def plot_function(x, y, z, triangles, function):
-    from mayavi import mlab
+
     mlab.triangular_mesh(x, y, z, triangles, scalars=function)
     v_options = {'mode': 'sphere',
                  'scale_factor': 1e-2, }
     mlab.points3d(x[0], y[0], z[0], **v_options)
 
+
 # RBF kernel
-
-
 def squared_exp(x, y, sigma=1, eta=1):
     l = -.5 / sigma**2
     xx = torch.einsum('ij,ij->i', x, x).unsqueeze(1)
