@@ -57,3 +57,11 @@ def squared_exp(x, y, sigma=1, eta=1):
     k = -2 * torch.mm(x, y.T) + xx + yy
     k *= l
     return eta*torch.exp(k)
+
+
+# Edge probabilities
+def edge_probability(x, y, t=1):
+    xx = torch.einsum('ij,ij->i', x, x).unsqueeze(1)
+    yy = torch.einsum('ij,ij->i', y, y).unsqueeze(0)
+    k = -2 * torch.mm(x, y.T) + xx + yy
+    return torch.exp(t*k)
