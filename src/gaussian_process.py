@@ -1,31 +1,31 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
+import torch
 import torch.nn as nn
-from utils import squared_exp
+from src.utils import squared_exp
 
 
 class GaussianProcess(nn.Module):
     def __init__(self):
         super(GaussianProcess, self).__init__()
 
-        lambda x, y: squared_exp(
-            x, y, sigma=0.05, eta=10)
+        # Default kernel
+        self.kernel_ = lambda x, y, *args: squared_exp(x, y, *args)
+        self.params_ = nn.Parameter(torch.tensor([1.]), requires_grad=True)
+
+        # Default signal variance
+        self.signal_ = nn.Parameter(torch.tensor(1.), requires_grad=True)
+
+        # Default noise variance
+        self.noise_ = nn.Parameter(torch.tensor(1e-8), requires_grad=True)
 
     def update(self):
-        pass
+        self.alpha_ = torch.linalg.solve(self.signal * self.kernel(self.samples, self.samples, *self.params_.tolist(
+        )) + self.noise * torch.eye(self.samples.size(0), self.samples.size(0)).to(self.samples.device), self.target)
 
     def forward(self, x):
-        return x
-
-    # Parameters
-    @property
-    def params(self):
-        return self.params_
-
-    @params.setter
-    def params(self, value):
-        self.params_ = nn.Parameter(value[0], requires_grad=value[1])
+        return torch.mm(self.kernel(self.samples, x, *self.params_.tolist()).t(), self.alpha_)
 
     # Kernel
     @property
@@ -34,7 +34,26 @@ class GaussianProcess(nn.Module):
 
     @kernel.setter
     def kernel(self, value):
-        self.kernel_ = value
+        self.kernel_ = lambda x, y, *args: value[0](x, y, *args)
+        self.params_ = nn.Parameter(value[1], requires_grad=value[2])
+
+    # Signal variance
+    @property
+    def signal(self):
+        return self.signal_
+
+    @signal.setter
+    def signal(self, value):
+        self.signal_ = nn.Parameter(value[0], requires_grad=value[1])
+
+    # Noise variance
+    @property
+    def noise(self):
+        return self.noise_
+
+    @noise.setter
+    def noise(self, value):
+        self.noise_ = nn.Parameter(value[0], requires_grad=value[1])
 
     # Training point
     @property

@@ -50,13 +50,13 @@ def plot_function(x, y, z, triangles, function):
 
 
 # RBF kernel
-def squared_exp(x, y, sigma=1, eta=1):
+def squared_exp(x, y, sigma=1):
     l = -.5 / sigma**2
     xx = torch.einsum('ij,ij->i', x, x).unsqueeze(1)
     yy = torch.einsum('ij,ij->i', y, y).unsqueeze(0)
     k = -2 * torch.mm(x, y.T) + xx + yy
     k *= l
-    return eta*torch.exp(k)
+    return torch.exp(k)
 
 
 # Edge probabilities
@@ -65,3 +65,36 @@ def edge_probability(x, y, t=1):
     yy = torch.einsum('ij,ij->i', y, y).unsqueeze(0)
     k = -2 * torch.mm(x, y.T) + xx + yy
     return torch.exp(t*k)
+
+
+def lanczos(A, v, iter=None):
+    # Set number of iterations
+    if iter is None:
+        iter = v.size(0)
+
+    # Create matrix for the Hamiltonian in Krylov subspace
+    T = torch.zeros((v.size(0), v.size(0)))
+    V = torch.zeros((v.size(0), v.size(0)))
+
+    # First step
+    w = torch.mm(A, v)
+    alpha = torch.mm(w.t(), v)
+    w = w - alpha * v
+
+    # Store
+    T[0, 0] = alpha
+    V[:, 0] = v.squeeze()
+
+    for j in torch.arange(1, iter):
+        beta = torch.linalg.norm(w)
+        v = w/beta
+        w = torch.mm(A, v)
+        alpha = torch.mm(w.t(), v)
+        w = w - alpha * v - beta*V[:, j-1].unsqueeze(1)
+
+        T[j, j] = alpha
+        T[j-1, j] = beta
+        T[j, j-1] = beta
+        V[:, j] = v.squeeze()
+
+    return T, V
