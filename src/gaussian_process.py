@@ -3,7 +3,7 @@
 
 import torch
 import torch.nn as nn
-from src.utils import squared_exp
+from src.kernels.squared_exp import SquaredExp
 
 
 class GaussianProcess(nn.Module):
@@ -11,8 +11,7 @@ class GaussianProcess(nn.Module):
         super(GaussianProcess, self).__init__()
 
         # Default kernel
-        self.kernel_ = lambda x, y, *args: squared_exp(x, y, *args)
-        self.params_ = nn.Parameter(torch.tensor([1.]), requires_grad=True)
+        self.kernel_ = SquaredExp()
 
         # Default signal variance
         self.signal_ = nn.Parameter(torch.tensor(1.), requires_grad=True)
@@ -20,12 +19,15 @@ class GaussianProcess(nn.Module):
         # Default noise variance
         self.noise_ = nn.Parameter(torch.tensor(1e-8), requires_grad=True)
 
+    def covariance(self):
+        return self.signal * self.kernel(self.samples, self.samples) + self.noise * torch.eye(self.samples.size(0), self.samples.size(0)).to(self.samples.device)
+
     def update(self):
-        self.alpha_ = torch.linalg.solve(self.signal * self.kernel(self.samples, self.samples, *self.params_.tolist(
-        )) + self.noise * torch.eye(self.samples.size(0), self.samples.size(0)).to(self.samples.device), self.target)
+        self.alpha_ = torch.linalg.solve(self.covariance(), self.target)
 
     def forward(self, x):
-        return torch.mm(self.kernel(self.samples, x, *self.params_.tolist()).t(), self.alpha_)
+        # .unsqueeze(1)
+        return torch.mm(self.kernel(self.samples, x).t(), self.alpha_)
 
     # Kernel
     @property
@@ -34,8 +36,7 @@ class GaussianProcess(nn.Module):
 
     @kernel.setter
     def kernel(self, value):
-        self.kernel_ = lambda x, y, *args: value[0](x, y, *args)
-        self.params_ = nn.Parameter(value[1], requires_grad=value[2])
+        self.kernel_ = value
 
     # Signal variance
     @property

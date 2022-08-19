@@ -73,8 +73,8 @@ def lanczos(A, v, iter=None):
         iter = v.size(0)
 
     # Create matrix for the Hamiltonian in Krylov subspace
-    T = torch.zeros((v.size(0), v.size(0)))
-    V = torch.zeros((v.size(0), v.size(0)))
+    T = torch.zeros((iter, iter)).to(A.device)
+    V = torch.zeros((v.size(0), iter)).to(A.device)
 
     # First step
     w = torch.mm(A, v)
@@ -98,3 +98,7 @@ def lanczos(A, v, iter=None):
         V[:, j] = v.squeeze()
 
     return T, V
+
+
+def riemann_exp(x, y, T, V):
+    pass
