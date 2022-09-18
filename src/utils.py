@@ -98,7 +98,3 @@ def lanczos(A, v, iter=None):
         V[:, j] = v.squeeze()
 
     return T, V
-
-
-def riemann_exp(x, y, T, V):
-    pass
