@@ -42,7 +42,7 @@ def build_ground_truth(mesh_file):
 
 # Plot function on the mesh
 def plot_function(x, y, z, triangles, function):
-
+    mlab.figure()
     mlab.triangular_mesh(x, y, z, triangles, scalars=function)
     v_options = {'mode': 'sphere',
                  'scale_factor': 1e-2, }

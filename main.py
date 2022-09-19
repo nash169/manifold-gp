@@ -17,10 +17,10 @@ use_cuda = torch.cuda.is_available()
 device = torch.device("cpu")  # torch.device("cuda" if use_cuda else "cpu")
 
 # Load mesh
-mesh = 'rsc/torus.msh'
+mesh = 'rsc/armadillo.msh'
 nodes, faces, truth = build_ground_truth(mesh)
 x, y, z = (nodes[:, i] for i in range(3))
-# plot_function(x, y, z, faces, truth)
+plot_function(x, y, z, faces, truth)
 X = np.array(nodes, dtype=np.float32)
 Y = np.array(truth, dtype=np.float32)
 X_sampled = torch.from_numpy(X).float().to(device).requires_grad_(True)
@@ -37,30 +37,41 @@ X_test = X_sampled[idx_test, :]
 Y_test = Y_sampled[idx_test]
 
 # Set Faiss
-
 index = faiss.IndexFlatL2(X_sampled.shape[1])
 index.train(X_sampled)
 index.add(X_sampled)
 
 # Build Graph
 k = 50
-sigma = 1e-2
+sigma = 1e-1
 eps = 2 * sigma**2
-distances, neighbors = index.search(X, k)
+distances, neighbors = index.search(X_sampled, k)
 i = np.concatenate((np.repeat(np.arange(neighbors.shape[0]), neighbors.shape[1])[
     np.newaxis, :], neighbors.reshape(1, -1)), axis=0)
 v = (X_sampled[i[0, :], :] - X_sampled[i[1, :], :]
      ).pow(2).sum(dim=1).div(-eps).exp()
-S = torch.sparse_coo_tensor(
+L = torch.sparse_coo_tensor(
     i, v, (neighbors.shape[0], neighbors.shape[0])).to(device)
 
 # Build Diffusion Maps Laplacian
-D = torch.sparse.sum(S, dim=1).pow(-1)
-# L = torch.mm(D, torch.mm(L, D))
-# L = (torch.eye(L.shape[0]).to(device) -
-#      torch.mm(L.sum(dim=1).pow(-1).diag(), L)) / eps * 4
+D = torch.sparse.sum(L, dim=1).pow(-1)
+index_diag = torch.cat((D.indices(), D.indices()), dim=0)
+D = torch.sparse_coo_tensor(index_diag, D.values(
+), (neighbors.shape[0], neighbors.shape[0])).to(device)
+L = torch.sparse.mm(D, torch.sparse.mm(L, D))
 
-# # T,V = torch.linalg.eig(L)
+D = torch.sparse.sum(L, dim=1).pow(-1)
+D = torch.sparse_coo_tensor(index_diag, D.values(
+), (neighbors.shape[0], neighbors.shape[0])).to(device)
+L = (torch.sparse_coo_tensor(index_diag, torch.ones(neighbors.shape[0]), (
+    neighbors.shape[0], neighbors.shape[0])).to(device) - torch.sparse.mm(D, L))/eps*4
+
+# Get eigenvectors
+T, V = torch.lobpcg(L, k=100, largest=False)
+
+# T, V = torch.linalg.eig(L.to_dense())
+plot_function(x, y, z, faces, V[:, 1].real.cpu().detach().numpy())
+plot_function(x, y, z, faces, V[:, 10].real.cpu().detach().numpy())
 
 # T, V = lanczos(L, torch.rand(
 #     L.shape[0], 1, dtype=torch.float64).to(device), 100)
@@ -71,14 +82,15 @@ D = torch.sparse.sum(S, dim=1).pow(-1)
 # gp_r.target = Y_train.unsqueeze(1)
 # gp_r.kernel_ = RiemannExp()
 # gp_r.kernel_.samples = X_sampled
-# gp_r.kernel_.eigenvalues = T.diag()
-# gp_r.kernel_.eigenvectors = V
+# gp_r.kernel_.eigenvalues = T.real[0:100]
+# gp_r.kernel_.eigenvectors = V[:, 0:100].real
 # gp_r.signal = (torch.tensor(1.), True)
 # gp_r.noise = (torch.tensor(1e-3), True)
 
 # gp_r.update()
 # sol_r = gp_r(X_test).squeeze()
 # error_r = (Y_test - sol_r).abs().cpu().detach().numpy()
+# plot_function(x, y, z, faces, gp_r(X_sampled).squeeze().cpu().detach().numpy())
 
 # # GPR Ambient
 # gp_a = GaussianProcess()
@@ -91,6 +103,21 @@ D = torch.sparse.sum(S, dim=1).pow(-1)
 # gp_a.update()
 # sol_a = gp_a(X_test).squeeze()
 # error_a = (Y_test - sol_a).abs().cpu().detach().numpy()
+
+# # opt = torch.optim.Adam(gp_a.parameters(), lr=1e-4)
+# # for i in range(1000):
+# #     K = gp_a.covariance()
+# #     loss = 0.5*(torch.mm(gp_a.target.t(), torch.linalg.solve(K, gp_a.target)) +
+# #                 torch.log(torch.linalg.det(K)))
+# #     loss.backward()
+# #     if i % 100 == 0:
+# #         print(
+# #             f"Iteration: {i}, Loss: {loss.item():0.2f}")
+# #     opt.step()
+# #     opt.zero_grad()
+# # gp_a.update()
+
+# plot_function(x, y, z, faces, gp_a(X_sampled).squeeze().cpu().detach().numpy())
 
 # print("Ambient GPR -> mean: ", error_a.mean(), " std: ", error_a.std())
 # print("Riemann GPR -> mean: ", error_r.mean(), " std: ", error_r.std())
