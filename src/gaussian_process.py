@@ -20,7 +20,7 @@ class GaussianProcess(nn.Module):
         self.noise_ = nn.Parameter(torch.tensor(1e-8), requires_grad=True)
 
     def covariance(self):
-        return self.signal * self.kernel(self.samples, self.samples) + self.noise * torch.eye(self.samples.size(0), self.samples.size(0)).to(self.samples.device)
+        return self.signal**2 * self.kernel(self.samples, self.samples) + self.noise**2 * torch.eye(self.samples.size(0), self.samples.size(0)).to(self.samples.device)
 
     def update(self):
         self.alpha_ = torch.linalg.solve(self.covariance(), self.target)

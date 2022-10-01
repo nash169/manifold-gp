@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
+from turtle import shape
 import torch
 import torch.nn as nn
 
 from src.utils import squared_exp
+from src.knn_expansion import KnnExpansion
 
 
 class RiemannExp(nn.Module):
@@ -12,14 +14,19 @@ class RiemannExp(nn.Module):
         super(RiemannExp, self).__init__()
 
         self.sigma_ = nn.Parameter(torch.tensor(l), requires_grad=True)
-        self.kernel_ = lambda x, y: squared_exp(x, y, 0.1)
 
     def spectral(self):
         s = (-0.5*self.sigma.pow(2)*self.eigenvalues).exp()
         return s/s.sum()
 
     def forward(self, x, y):
-        return torch.mm(torch.mm(self.kernel_(x, self.samples), self.eigenvectors).sum(dim=1).unsqueeze(1), torch.mm(self.spectral().unsqueeze(0), torch.mm(self.eigenvectors.t(), self.kernel_(self.samples, y))))
+        s = self.spectral()
+        k = torch.zeros(x.shape[0], y.shape[0]).to(x.device)
+        for i in range(s.shape[0]):
+            k += s[i]*torch.outer(self.eigenfunctions[i](x),
+                                  self.eigenfunctions[i](y))
+
+        return k
 
     # Sigma variance
     @property
@@ -39,20 +46,11 @@ class RiemannExp(nn.Module):
     def eigenvalues(self, value):
         self.eigenvalues_ = value
 
-    # Eigenvectors
+    # Eigenfunction
     @property
-    def eigenvectors(self):
-        return self.eigenvectors_
+    def eigenfunctions(self):
+        return self.eigenfunctions_
 
-    @eigenvectors.setter
-    def eigenvectors(self, value):
-        self.eigenvectors_ = value
-
-    # Eigenvectors
-    @property
-    def samples(self):
-        return self.samples_
-
-    @samples.setter
-    def samples(self, value):
-        self.samples_ = value
+    @eigenfunctions.setter
+    def eigenfunctions(self, value):
+        self.eigenfunctions_ = value
