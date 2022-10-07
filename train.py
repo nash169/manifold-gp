@@ -10,7 +10,7 @@ use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
 # Load mesh
-mesh = 'rsc/torus3k.msh'
+mesh = 'rsc/dragon10k.stl'
 nodes, faces, truth = build_ground_truth(mesh)
 x, y, z = (nodes[:, i] for i in range(3))
 X_sampled = torch.from_numpy(nodes).float().to(device).requires_grad_(True)

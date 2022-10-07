@@ -26,7 +26,7 @@ device = torch.device("cuda" if use_cuda else "cpu")
 # myMesh = myMesh.simplify_quadratic_decimation(2000)
 
 # Load mesh
-mesh = 'rsc/torus3k.msh'
+mesh = 'rsc/dragon10k.stl'
 nodes, faces, truth = build_ground_truth(mesh)
 x, y, z = (nodes[:, i] for i in range(3))
 plot_function(x, y, z, faces, truth)
@@ -58,8 +58,10 @@ index.add(X_sampled)
 
 # Build Graph
 k = 50
-sigma = 5e-1  # opt 0.6757
-eps = 2 * sigma**2
+# sigma = 5e-1  # opt 0.6757
+# eps = 2 * sigma**2
+eps = 0.5054
+sigma = np.sqrt(eps/2)
 distances, neighbors = index.search(X_sampled, k+1)
 distances = distances[:, 1:]
 neighbors = neighbors[:, 1:]
@@ -106,7 +108,7 @@ f.k = k
 f.sigma = sigma
 
 # Create Riemann Kernel
-kernel = RiemannExp(1e-2)
+kernel = RiemannExp(0.5054)
 kernel.eigenvalues = T
 kernel.eigenfunctions = f
 
@@ -117,30 +119,31 @@ gp_r.target = Y_train.unsqueeze(1).to(device)
 gp_r.kernel_ = kernel
 gp_r.signal = (torch.tensor(1.), True)
 gp_r.noise = (torch.tensor(1e-3), True)
-gp_r.train()
+# gp_r.train()
+gp_r.update()
 sol_r = gp_r(X_test).squeeze()
 error_r = (Y_test - sol_r).abs().cpu().detach().numpy()
 plot_function(x, y, z, faces, gp_r(X_sampled).squeeze().cpu().detach().numpy())
 
-# GPR Ambient
-gp_a = GaussianProcess()
-gp_a.samples = X_train
-gp_a.target = Y_train.unsqueeze(1)
-gp_a.kernel_ = SquaredExp(1.)
-gp_a.signal = (torch.tensor(0.1), True)
-gp_a.noise = (torch.tensor(1.), True)
-gp_r.train()
-sol_a = gp_a(X_test).squeeze()
-error_a = (Y_test - sol_a).abs().cpu().detach().numpy()
-plot_function(x, y, z, faces, gp_a(X_sampled).squeeze().cpu().detach().numpy())
+# # GPR Ambient
+# gp_a = GaussianProcess()
+# gp_a.samples = X_train
+# gp_a.target = Y_train.unsqueeze(1)
+# gp_a.kernel_ = SquaredExp(1.)
+# gp_a.signal = (torch.tensor(0.1), True)
+# gp_a.noise = (torch.tensor(1.), True)
+# gp_r.train()
+# sol_a = gp_a(X_test).squeeze()
+# error_a = (Y_test - sol_a).abs().cpu().detach().numpy()
+# plot_function(x, y, z, faces, gp_a(X_sampled).squeeze().cpu().detach().numpy())
 
-print("Ambient GPR -> mean: ", error_a.mean(), " std: ", error_a.std())
-print("Riemann GPR -> mean: ", error_r.mean(), " std: ", error_r.std())
+# print("Ambient GPR -> mean: ", error_a.mean(), " std: ", error_a.std())
+# print("Riemann GPR -> mean: ", error_r.mean(), " std: ", error_r.std())
 
-# Plot
-fig = plt.figure()
-ax = fig.add_subplot(111)
-ax.plot(np.arange(num_test), error_r, '-o')
-ax.plot(np.arange(num_test), error_a, '-o')
+# # Plot
+# fig = plt.figure()
+# ax = fig.add_subplot(111)
+# ax.plot(np.arange(num_test), error_r, '-o')
+# ax.plot(np.arange(num_test), error_a, '-o')
 
-plt.show()
+# plt.show()

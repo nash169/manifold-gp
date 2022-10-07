@@ -12,6 +12,7 @@ class Laplacian(nn.Module):
 
         # Default neighborhoods
         self.eps_ = nn.Parameter(torch.tensor(0.1), requires_grad=True)
+        self.k_ = nn.Parameter(torch.tensor(0.1), requires_grad=True)
 
     def forward(self, x):
         l = -1. / self.eps_
@@ -20,17 +21,17 @@ class Laplacian(nn.Module):
         L *= l
         D = L.sum(dim=1).pow(-1)
         L = D.unsqueeze(1)*L*D.unsqueeze(0)
-        L = (torch.eye(L.shape[0]).to(x.device) -
-             L.sum(dim=1).pow(-1).unsqueeze(1)*L) / self.eps_ * 4
+        L = torch.eye(L.shape[0]).to(x.device) - \
+            L.sum(dim=1).pow(-1).unsqueeze(1)*L
 
         return L
 
     def power(self, L):
-        return torch.eye(L.shape[0]).to(L.device) - L + torch.linalg.matrix_power(L, 2) - torch.linalg.matrix_power(L, 3)/math.factorial(3) + torch.linalg.matrix_power(L, 4)/math.factorial(4)
+        return torch.eye(L.shape[0]).to(L.device) - self.k_.pow(2)/2*L + torch.linalg.matrix_power(self.k_.pow(2)/2*L, 2) - torch.linalg.matrix_power(self.k_.pow(2)/2*L, 3)/math.factorial(3) + torch.linalg.matrix_power(self.k_.pow(2)/2*L, 4)/math.factorial(4)
 
     def train(self, y, iter=1000, verbose=True):
         opt = torch.optim.Adam(self.parameters(), lr=1e-3)
-        for i in range(1000):
+        for i in range(iter):
             K = self.power(self.forward(self.samples_))
             loss = 0.5*(torch.mm(y.t(), torch.linalg.solve(K, y)) +
                         torch.linalg.slogdet(K).logabsdet)
