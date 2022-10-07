@@ -3,16 +3,20 @@
 
 import numpy as np
 import torch
-import trimesh
 import networkx as nx
+import os
 
 from mayavi import mlab
 
 
 # Build ground truth on the mesh
 def build_ground_truth(mesh_file):
+    import trimesh
     # Load mesh
-    mesh = trimesh.load_mesh(trimesh.interfaces.gmsh.load_gmsh(mesh_file))
+    if os.path.splitext(mesh_file)[1] == '.msh':
+        mesh = trimesh.load_mesh(trimesh.interfaces.gmsh.load_gmsh(mesh_file))
+    else:
+        mesh = trimesh.load(mesh_file)
 
     # edges without duplication
     edges = mesh.edges_unique
@@ -32,12 +36,23 @@ def build_ground_truth(mesh_file):
     N = len(mesh.vertices)
 
     ground_truth = np.zeros((N))
-    period = 2  # 2*np.pi / 0.3 * 2
+    period = 1  # 2*np.pi / 0.3 * 2
 
     for i in range(N):
         ground_truth[i] = 2 * np.sin(geodesics.get(i) * period + 0.3)
 
     return mesh.vertices, mesh.faces, ground_truth
+
+
+def load_mesh(mesh_file):
+    import trimesh
+    # Load mesh
+    if os.path.splitext(mesh_file)[1] == '.msh':
+        mesh = trimesh.load_mesh(trimesh.interfaces.gmsh.load_gmsh(mesh_file))
+    else:
+        mesh = trimesh.load(mesh_file)
+
+    return mesh.vertices, mesh.faces
 
 
 # Plot function on the mesh

@@ -20,13 +20,7 @@ class RiemannExp(nn.Module):
         return s/s.sum()
 
     def forward(self, x, y):
-        s = self.spectral()
-        k = torch.zeros(x.shape[0], y.shape[0]).to(x.device)
-        for i in range(s.shape[0]):
-            k += s[i]*torch.outer(self.eigenfunctions[i](x),
-                                  self.eigenfunctions[i](y))
-
-        return k
+        return torch.mm(self.eigenfunctions(x).T, self.spectral().unsqueeze(1)*self.eigenfunctions(y))
 
     # Sigma variance
     @property

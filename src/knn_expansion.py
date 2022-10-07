@@ -17,7 +17,8 @@ class KnnExpansion(nn.Module):
 
     def forward(self, x):
         d, i = self.knn.search(x, self.k)
-        return torch.sum(self.alpha_[i] * torch.exp(-0.5 * d/self.sigma**2), dim=1)
+
+        return torch.sum(self.alpha_[i].permute(2, 0, 1) * torch.exp(-0.5 * d/self.sigma**2), dim=2)
 
     # Weights
     @property

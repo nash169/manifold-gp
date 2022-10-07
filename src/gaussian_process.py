@@ -29,6 +29,19 @@ class GaussianProcess(nn.Module):
         # .unsqueeze(1)
         return torch.mm(self.kernel(self.samples, x).t(), self.alpha_)
 
+    def train(self, iter=1000, verbose=True):
+        opt = torch.optim.Adam(self.parameters(), lr=1e-3)
+        for i in range(1000):
+            K = self.covariance()
+            loss = 0.5*(torch.mm(self.target.t(), torch.linalg.solve(K,
+                        self.target)) + torch.linalg.slogdet(K).logabsdet)
+            loss.backward(retain_graph=True)
+            if verbose and i % 100 == 0:
+                print(f"Iteration: {i}, Loss: {loss.item():0.2f}")
+            opt.step()
+            opt.zero_grad()
+        self.update()
+
     # Kernel
     @property
     def kernel(self):
