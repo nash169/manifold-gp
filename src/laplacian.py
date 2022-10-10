@@ -4,6 +4,8 @@
 import math
 import torch
 import torch.nn as nn
+import numpy as np
+from time import time
 
 
 class Laplacian(nn.Module):
@@ -11,8 +13,9 @@ class Laplacian(nn.Module):
         super(Laplacian, self).__init__()
 
         # Default neighborhoods
-        self.eps_ = nn.Parameter(torch.tensor(0.1), requires_grad=True)
-        self.k_ = nn.Parameter(torch.tensor(0.1), requires_grad=True)
+        self.eps_ = nn.Parameter(
+            torch.tensor(0.1), requires_grad=True)
+        self.sigma_ = nn.Parameter(torch.tensor(0.1), requires_grad=True)
 
     def forward(self, x):
         l = -1. / self.eps_
@@ -27,15 +30,19 @@ class Laplacian(nn.Module):
         return L
 
     def power(self, L):
-        return torch.eye(L.shape[0]).to(L.device) - self.k_.pow(2)/2*L + torch.linalg.matrix_power(self.k_.pow(2)/2*L, 2) - torch.linalg.matrix_power(self.k_.pow(2)/2*L, 3)/math.factorial(3) + torch.linalg.matrix_power(self.k_.pow(2)/2*L, 4)/math.factorial(4)
+        return torch.eye(L.shape[0]).to(L.device) - self.sigma_.pow(2)/2*L + torch.linalg.matrix_power(self.sigma_.pow(2)/2*L, 2) - torch.linalg.matrix_power(self.sigma_.pow(2)/2*L, 3)/math.factorial(3) + torch.linalg.matrix_power(self.sigma_.pow(2)/2*L, 4)/math.factorial(4)
 
     def train(self, y, iter=1000, verbose=True):
         opt = torch.optim.Adam(self.parameters(), lr=1e-3)
         for i in range(iter):
-            K = self.power(self.forward(self.samples_))
-            loss = 0.5*(torch.mm(y.t(), torch.linalg.solve(K, y)) +
-                        torch.linalg.slogdet(K).logabsdet)
+            K = self.power(self.forward(self.samples))
+            loss = 0.5 * \
+                (torch.mm(y.t(), torch.linalg.solve(K, y)) +
+                 torch.linalg.slogdet(K).logabsdet)
+            # t0 = time()
             loss.backward(retain_graph=True)
+            # t1 = time()
+            # print("Time: %.2g sec" % (t1 - t0))
             if verbose and i % 100 == 0:
                 print(f"Iteration: {i}, Loss: {loss.item():0.2f}")
             opt.step()
@@ -49,3 +56,21 @@ class Laplacian(nn.Module):
     @samples.setter
     def samples(self, value):
         self.samples_ = value
+
+    # # KNN
+    # @property
+    # def knn(self):
+    #     return self.knn_
+
+    # @knn.setter
+    # def knn(self, value):
+    #     self.knn_ = value
+
+    # # KNN
+    # @property
+    # def k(self):
+    #     return self.k_
+
+    # @k.setter
+    # def k(self, value):
+    #     self.k_ = value
