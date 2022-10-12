@@ -7,6 +7,7 @@ import numpy as np
 import faiss
 import faiss.contrib.torch_utils
 import networkx as nx
+from src.kernels.riemann_matern import RiemannMatern
 from src.laplacian import Laplacian
 from src.gaussian_process import GaussianProcess
 from src.knn_expansion import KnnExpansion
@@ -48,12 +49,18 @@ Y = data[:, -1][:, np.newaxis]
 use_cuda = False  # torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
-X_sampled = torch.from_numpy(X[:, :2]).float().to(device).requires_grad_(True)
+X_sampled = torch.from_numpy(X).float().to(device).requires_grad_(True)
 Y_sampled = torch.from_numpy(Y).float().to(device).requires_grad_(True)
 
 lp = Laplacian()
-lp.samples = X_sampled
-lp.train(Y_sampled)
+for param in lp.parameters():
+    if param.requires_grad:
+        print(param.data)
+lp.train(X_sampled, Y_sampled, 2000)
+for param in lp.parameters():
+    if param.requires_grad:
+        print(param.data)
+
 
 # Training/Test points
 num_train = 50
@@ -69,15 +76,14 @@ Y_test = Y_sampled[idx_test]
 index = faiss.IndexFlatL2(X_sampled.shape[1])
 index.train(X_sampled)
 index.add(X_sampled)
-k = 50
-eps = 2*lp.eps_**2
+k = 2
 distances, neighbors = index.search(X_sampled, k+1)
 distances = distances[:, 1:]
 neighbors = neighbors[:, 1:]
 i = np.concatenate((np.repeat(np.arange(neighbors.shape[0]), neighbors.shape[1])[
     np.newaxis, :], neighbors.reshape(1, -1)), axis=0)
 v = (X_sampled[i[0, :], :] - X_sampled[i[1, :], :]
-     ).pow(2).sum(dim=1).div(-eps).exp()
+     ).pow(2).sum(dim=1).div(-lp.eps_).exp()
 L = torch.sparse_coo_tensor(
     i, v, (neighbors.shape[0], neighbors.shape[0])).to(device)
 D = torch.sparse.sum(L, dim=1).pow(-1)
@@ -88,8 +94,8 @@ L = torch.sparse.mm(D, torch.sparse.mm(L, D))
 D = torch.sparse.sum(L, dim=1).pow(-1)
 D = torch.sparse_coo_tensor(index_diag, D.values(
 ), (neighbors.shape[0], neighbors.shape[0])).to(device)
-L = torch.sparse_coo_tensor(index_diag, torch.ones(neighbors.shape[0]), (
-    neighbors.shape[0], neighbors.shape[0])).to(device) - torch.sparse.mm(D, L)
+L = (torch.sparse_coo_tensor(index_diag, torch.ones(neighbors.shape[0]), (
+    neighbors.shape[0], neighbors.shape[0])).to(device) - torch.sparse.mm(D, L))/(1/4*lp.eps_)
 
 # Get eigenvectors
 num_eigs = 100
@@ -108,7 +114,8 @@ f.k = k
 f.sigma = lp.eps_
 
 # Create Riemann Kernel
-kernel = RiemannExp(lp.sigma_)
+kernel = RiemannMatern(lp.k_)
+# kernel = RiemannExp(lp.k_)
 kernel.eigenvalues = T
 kernel.eigenfunctions = f
 
@@ -117,10 +124,10 @@ gp_r = GaussianProcess().to(device)
 gp_r.samples = X_train.to(device)
 gp_r.target = Y_train.to(device)
 gp_r.kernel_ = kernel
-gp_r.signal = (torch.tensor(1.), True)
-gp_r.noise = (torch.tensor(1e-3), True)
-# gp_r.update()
-gp_r.train()
+gp_r.signal = (lp.sigma_, True)
+gp_r.noise = (lp.sigma_n_.data, True)
+gp_r.update()
+# gp_r.train(2000)
 
 fig = plt.figure()
 ax = fig.add_subplot(111, projection="3d")
@@ -134,6 +141,9 @@ ax = fig.add_subplot(111, projection="3d")
 ax.scatter(X[0, 0], X[0, 1], X[0, 2], c="r", linewidths=10, edgecolors="r")
 ax.scatter(X[:, 0], X[:, 1], X[:, 2])
 sol = gp_r(X_sampled).squeeze().cpu().detach().numpy()
+X_train = X_train.cpu().detach().numpy()
+ax.scatter(X_train[:, 0], X_train[:, 1], X_train[:, 2], c="r")
 ax.scatter(X[:, 0], X[:, 1], sol, c=sol)
+ax.set_box_aspect((np.ptp(X[:, 0]), np.ptp(X[:, 1]), np.ptp(sol)))
 
 plt.show()

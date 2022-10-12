@@ -1,22 +1,23 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-from turtle import shape
 import torch
 import torch.nn as nn
 
-from src.utils import squared_exp
-from src.knn_expansion import KnnExpansion
 
-
-class RiemannExp(nn.Module):
+class RiemannMatern(nn.Module):
     def __init__(self, l=1.):
-        super(RiemannExp, self).__init__()
+        super(RiemannMatern, self).__init__()
 
         self.k_ = nn.Parameter(torch.tensor(l), requires_grad=True)
 
+        self.ni_ = 3
+
+        self.d_ = 1.0
+
     def spectral(self):
-        s = (-0.5*self.k.pow(2)*self.eigenvalues).exp()
+        s = (2*self.ni_ / self.k**2 +
+             self.eigenvalues).pow(-self.ni_ - self.d_/2)
         return s/s.sum()
 
     def forward(self, x, y):

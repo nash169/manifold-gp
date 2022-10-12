@@ -31,7 +31,7 @@ class GaussianProcess(nn.Module):
 
     def train(self, iter=1000, verbose=True):
         opt = torch.optim.Adam(self.parameters(), lr=1e-3)
-        for i in range(1000):
+        for i in range(iter):
             K = self.covariance()
             loss = 0.5*(torch.mm(self.target.t(), torch.linalg.solve(K,
                         self.target)) + torch.linalg.slogdet(K).logabsdet)
