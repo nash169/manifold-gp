@@ -1,9 +1,18 @@
 import numpy as np
+
 import torch
+import torch.nn as nn
+import torch.nn.utils.parametrize as parametrize
+
 import matplotlib.pyplot as plt
+
+import faiss
+import faiss.contrib.torch_utils
 
 from src.gaussian_process import GaussianProcess
 from src.kernels.squared_exp import SquaredExp
+
+from src.parametrization import MaternCovariance
 
 # CPU/GPU setting
 use_cuda = torch.cuda.is_available()

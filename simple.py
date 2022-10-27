@@ -56,10 +56,10 @@ lp = Laplacian()
 for param in lp.parameters():
     if param.requires_grad:
         print(param.data)
-lp.train(X_sampled, Y_sampled, 2000)
-for param in lp.parameters():
-    if param.requires_grad:
-        print(param.data)
+# lp.train(X_sampled, Y_sampled, 2000)
+# for param in lp.parameters():
+#     if param.requires_grad:
+#         print(param.data)
 
 
 # Training/Test points
@@ -110,8 +110,8 @@ V = torch.from_numpy(V).float().to(device).requires_grad_(True)
 f = KnnExpansion()
 f.alpha = V
 f.knn = index
-f.k = k
-f.sigma = lp.eps_
+f.k = 2
+f.sigma = torch.sqrt(lp.eps_/2)
 
 # Create Riemann Kernel
 kernel = RiemannMatern(lp.k_)
@@ -126,24 +126,27 @@ gp_r.target = Y_train.to(device)
 gp_r.kernel_ = kernel
 gp_r.signal = (lp.sigma_, True)
 gp_r.noise = (lp.sigma_n_.data, True)
-gp_r.update()
-# gp_r.train(2000)
+# gp_r.update()
+gp_r.train(10000)
 
 fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.scatter(X[0, 0], X[0, 1], X[0, 2], c="r", linewidths=10, edgecolors="r")
-ax.scatter(X[:, 0], X[:, 1], X[:, 2])
-ax.scatter(X[:, 0], X[:, 1], Y, c=Y)
-ax.set_box_aspect((np.ptp(X[:, 0]), np.ptp(X[:, 1]), np.ptp(Y)))
-
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.scatter(X[0, 0], X[0, 1], X[0, 2], c="r", linewidths=10, edgecolors="r")
-ax.scatter(X[:, 0], X[:, 1], X[:, 2])
-sol = gp_r(X_sampled).squeeze().cpu().detach().numpy()
+ax = fig.add_subplot(111)
+ax.scatter(X[:, 0], X[:, 1])
 X_train = X_train.cpu().detach().numpy()
-ax.scatter(X_train[:, 0], X_train[:, 1], X_train[:, 2], c="r")
-ax.scatter(X[:, 0], X[:, 1], sol, c=sol)
-ax.set_box_aspect((np.ptp(X[:, 0]), np.ptp(X[:, 1]), np.ptp(sol)))
+ax.scatter(X_train[:, 0], X_train[:, 1], c="r", edgecolors="r")
+ax.axis('equal')
+
+fig = plt.figure()
+ax = fig.add_subplot(111)
+plot = ax.scatter(X[:, 0], X[:, 1], c=Y, vmin=-0.5, vmax=0.5)
+fig.colorbar(plot)
+ax.axis('equal')
+
+fig = plt.figure()
+ax = fig.add_subplot(111)
+sol = gp_r(X_sampled).squeeze().cpu().detach().numpy()
+plot = ax.scatter(X[:, 0], X[:, 1], c=sol, vmin=-0.5, vmax=0.5)
+fig.colorbar(plot)
+ax.axis('equal')
 
 plt.show()

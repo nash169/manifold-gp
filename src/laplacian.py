@@ -4,8 +4,6 @@
 import math
 import torch
 import torch.nn as nn
-import numpy as np
-from time import time
 
 
 class Laplacian(nn.Module):
@@ -37,8 +35,8 @@ class Laplacian(nn.Module):
 
         return L
 
-    def covariance_matern(self, x, ni=3):
-        return torch.linalg.matrix_power(2*ni/self.k_**2 + self.forward(x), ni)*self.sigma_**2 + torch.eye(x.shape[0]).to(x.device)*self.sigma_n_**2
+    def covariance_matern(self, x, nu=5):
+        return torch.linalg.matrix_power(2*nu/self.k_**2 + self.forward(x), nu)*self.sigma_**2 + torch.eye(x.shape[0]).to(x.device)*self.sigma_n_**2
 
     def covariance_exp(self, x):
         L = self.forward(x)

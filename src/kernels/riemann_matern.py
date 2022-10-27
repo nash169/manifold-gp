@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env pythonnu_
 # encoding: utf-8
 
 import torch
@@ -11,13 +11,13 @@ class RiemannMatern(nn.Module):
 
         self.k_ = nn.Parameter(torch.tensor(l), requires_grad=True)
 
-        self.ni_ = 3
+        self.nu_ = 5
 
         self.d_ = 1.0
 
     def spectral(self):
-        s = (2*self.ni_ / self.k**2 +
-             self.eigenvalues).pow(-self.ni_ - self.d_/2)
+        s = (2*self.nu_ / self.k**2 +
+             self.eigenvalues).pow(-self.nu_ - self.d_/2)
         return s/s.sum()
 
     def forward(self, x, y):
