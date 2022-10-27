@@ -12,8 +12,6 @@ import faiss.contrib.torch_utils
 from src.gaussian_process import GaussianProcess
 from src.kernels.squared_exp import SquaredExp
 
-from src.parametrization import MaternCovariance
-
 # CPU/GPU setting
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
