@@ -1,9 +1,9 @@
 import numpy as np
 import faiss
-# import jax.numpy as jnp
+import jax.numpy as jnp
 
-# from jax import grad, jit, vmap
-# from src.laplacian_jax import LaplacianJax
+from jax import grad, jit, vmap
+from src.laplacian_jax import LaplacianJax
 from scipy.sparse import coo_matrix
 
 data = np.loadtxt('rsc/dumbbell.msh')
@@ -33,8 +33,10 @@ row = np.arange(neighbors.shape[0]).repeat(neighbors.shape[1])
 col = neighbors.reshape(1, -1).squeeze()
 data = -distances.reshape(1, -1).squeeze()
 
-L = coo_matrix((data, (row, col)), shape=(
+S = coo_matrix((data, (row, col)), shape=(
     neighbors.shape[0], neighbors.shape[0]))
+
+L = np.expm1(S)
 
 # lp = LaplacianJax(neighbors, distances)
 # i = np.concatenate((np.repeat(np.arange(neighbors.shape[0]), neighbors.shape[1])[

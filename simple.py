@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
+from turtle import distance
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
@@ -52,14 +53,22 @@ device = torch.device("cuda" if use_cuda else "cpu")
 X_sampled = torch.from_numpy(X).float().to(device).requires_grad_(True)
 Y_sampled = torch.from_numpy(Y).float().to(device).requires_grad_(True)
 
-lp = Laplacian()
+index = faiss.IndexFlatL2(X_sampled.shape[1])
+index.train(X_sampled)
+index.add(X_sampled)
+k = 4
+distances, neighbors = index.search(X_sampled, k+1)
+distances = distances[:, 1:]
+neighbors = neighbors[:, 1:]
+
+lp = Laplacian(X_sampled)
 for param in lp.parameters():
     if param.requires_grad:
         print(param.data)
-# lp.train(X_sampled, Y_sampled, 2000)
-# for param in lp.parameters():
-#     if param.requires_grad:
-#         print(param.data)
+lp.train(Y_sampled, 10000)
+for param in lp.parameters():
+    if param.requires_grad:
+        print(param.data)
 
 
 # Training/Test points
@@ -73,13 +82,13 @@ X_test = X_sampled[idx_test, :]
 Y_test = Y_sampled[idx_test]
 
 # Build Diffusion Maps Laplacian
-index = faiss.IndexFlatL2(X_sampled.shape[1])
-index.train(X_sampled)
-index.add(X_sampled)
-k = 2
-distances, neighbors = index.search(X_sampled, k+1)
-distances = distances[:, 1:]
-neighbors = neighbors[:, 1:]
+# index = faiss.IndexFlatL2(X_sampled.shape[1])
+# index.train(X_sampled)
+# index.add(X_sampled)
+# k = 2
+# distances, neighbors = index.search(X_sampled, k+1)
+# distances = distances[:, 1:]
+# neighbors = neighbors[:, 1:]
 i = np.concatenate((np.repeat(np.arange(neighbors.shape[0]), neighbors.shape[1])[
     np.newaxis, :], neighbors.reshape(1, -1)), axis=0)
 v = (X_sampled[i[0, :], :] - X_sampled[i[1, :], :]
@@ -126,8 +135,8 @@ gp_r.target = Y_train.to(device)
 gp_r.kernel_ = kernel
 gp_r.signal = (lp.sigma_, True)
 gp_r.noise = (lp.sigma_n_.data, True)
-# gp_r.update()
-gp_r.train(10000)
+gp_r.update()
+# gp_r.train(10000)
 
 fig = plt.figure()
 ax = fig.add_subplot(111)
@@ -141,6 +150,8 @@ ax = fig.add_subplot(111)
 plot = ax.scatter(X[:, 0], X[:, 1], c=Y, vmin=-0.5, vmax=0.5)
 fig.colorbar(plot)
 ax.axis('equal')
+ax.set_title('Ground Truth')
+
 
 fig = plt.figure()
 ax = fig.add_subplot(111)
@@ -148,5 +159,6 @@ sol = gp_r(X_sampled).squeeze().cpu().detach().numpy()
 plot = ax.scatter(X[:, 0], X[:, 1], c=sol, vmin=-0.5, vmax=0.5)
 fig.colorbar(plot)
 ax.axis('equal')
+ax.set_title('Riemann GPR')
 
 plt.show()

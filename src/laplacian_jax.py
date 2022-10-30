@@ -8,7 +8,7 @@ from scipy.sparse import coo_matrix
 
 
 class LaplacianJax():
-    def __init__(self, indices, distances):
+    def __init__(self, indices, distances, nu=1):
         super(LaplacianJax, self).__init__()
 
         # # Laplacian heat kernel hyperparameter
@@ -16,11 +16,17 @@ class LaplacianJax():
         #     torch.tensor(0.01), requires_grad=True)
 
         row = np.arange(indices.shape[0]).repeat(indices.shape[1])
-        col = indices.reshape(1, -1)
-        data = -distances.reshape(1, -1)
+        col = indices.reshape(1, -1).squeeze()
+        data = -distances.reshape(1, -1).squeeze()
 
-        self.L_ = coo_matrix((data, (row, col)), shape=(
+        self.S_ = coo_matrix((data, (row, col)), shape=(
             indices.shape[0], indices.shape[0]))
+
+        self.nu_ = nu
+
+    # def predict(params, inputs):
+    #     for eps, k, sigma, sigma_n in params:
+    #         L = np.expm1()
 
         # # Covariance function length hyperparameter
         # self.k_ = nn.Parameter(torch.tensor(0.1), requires_grad=True)
