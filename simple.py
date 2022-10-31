@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-from turtle import distance
+from turtle import distance, shape
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,6 +15,7 @@ from src.knn_expansion import KnnExpansion
 from src.kernels.riemann_exp import RiemannExp
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import eigs
+from src.laplacian_knn import LaplacianKnn
 
 
 # def ground_truth(X):
@@ -44,7 +45,7 @@ from scipy.sparse.linalg import eigs
 # np.savetxt('rsc/dumbbell.msh', np.concatenate((X, Y), axis=1))
 
 data = np.loadtxt('rsc/dumbbell.msh')
-X = data[:, :3]
+X = data[:, :2]
 Y = data[:, -1][:, np.newaxis]
 
 use_cuda = False  # torch.cuda.is_available()
@@ -56,109 +57,134 @@ Y_sampled = torch.from_numpy(Y).float().to(device).requires_grad_(True)
 index = faiss.IndexFlatL2(X_sampled.shape[1])
 index.train(X_sampled)
 index.add(X_sampled)
-k = 4
+k = 2
 distances, neighbors = index.search(X_sampled, k+1)
 distances = distances[:, 1:]
 neighbors = neighbors[:, 1:]
 
 lp = Laplacian(X_sampled)
-for param in lp.parameters():
-    if param.requires_grad:
-        print(param.data)
-lp.train(Y_sampled, 10000)
-for param in lp.parameters():
-    if param.requires_grad:
-        print(param.data)
+# for param in lp.parameters():
+#     if param.requires_grad:
+#         print(param.data)
+# lp.train(Y_sampled, 10000)
+# for param in lp.parameters():
+#     if param.requires_grad:
+#         print(param.data)
+for n, p in lp.named_parameters():
+    print('Parameter name:', n)
+    print(p.data)
 
+lp_knn = LaplacianKnn(neighbors, distances)
 
-# Training/Test points
-num_train = 50
-idx_train = torch.randint(X_sampled.shape[0], (num_train,))
-X_train = X_sampled[idx_train, :]
-Y_train = Y_sampled[idx_train]
-num_test = 10
-idx_test = torch.randint(X_sampled.shape[0], (num_test,))
-X_test = X_sampled[idx_test, :]
-Y_test = Y_sampled[idx_test]
+# L = distances.div(-lp.eps_.data).exp()
+# D = L.sum(dim=1)
+# L = L.div(D.unsqueeze(1)).div(D[neighbors])
+# L = torch.cat((torch.ones(X_sampled.shape[0], 1), -L), dim=1)
+# L_indices = torch.cat(
+#     (torch.arange(X_sampled.shape[0]).unsqueeze(1), neighbors), dim=1)
 
-# Build Diffusion Maps Laplacian
-# index = faiss.IndexFlatL2(X_sampled.shape[1])
-# index.train(X_sampled)
-# index.add(X_sampled)
-# k = 2
-# distances, neighbors = index.search(X_sampled, k+1)
-# distances = distances[:, 1:]
-# neighbors = neighbors[:, 1:]
-i = np.concatenate((np.repeat(np.arange(neighbors.shape[0]), neighbors.shape[1])[
-    np.newaxis, :], neighbors.reshape(1, -1)), axis=0)
-v = (X_sampled[i[0, :], :] - X_sampled[i[1, :], :]
-     ).pow(2).sum(dim=1).div(-lp.eps_).exp()
-L = torch.sparse_coo_tensor(
-    i, v, (neighbors.shape[0], neighbors.shape[0])).to(device)
-D = torch.sparse.sum(L, dim=1).pow(-1)
-index_diag = torch.cat((D.indices(), D.indices()), dim=0)
-D = torch.sparse_coo_tensor(index_diag, D.values(
-), (neighbors.shape[0], neighbors.shape[0])).to(device)
-L = torch.sparse.mm(D, torch.sparse.mm(L, D))
-D = torch.sparse.sum(L, dim=1).pow(-1)
-D = torch.sparse_coo_tensor(index_diag, D.values(
-), (neighbors.shape[0], neighbors.shape[0])).to(device)
-L = (torch.sparse_coo_tensor(index_diag, torch.ones(neighbors.shape[0]), (
-    neighbors.shape[0], neighbors.shape[0])).to(device) - torch.sparse.mm(D, L))/(1/4*lp.eps_)
+# # Similarity matrix
+# rows = torch.arange(L_indices.shape[0]).repeat_interleave(
+#     L_indices.shape[1]).unsqueeze(0)
+# cols = L_indices.reshape(1, -1)
+# values = L.reshape(1, -1).squeeze()
+# L_mat = torch.sparse_coo_tensor(
+#     torch.cat((rows, cols), dim=0), values, (L_indices.shape[0], L_indices.shape[0])).to_dense()
+# L_test = lp.forward()
 
-# Get eigenvectors
-num_eigs = 100
-indices = L.coalesce().indices().cpu().detach().numpy()
-values = L.coalesce().values().cpu().detach().numpy()
-Ls = coo_matrix((values, (indices[0, :], indices[1, :])), shape=L.shape)
-T, V = eigs(Ls, k=num_eigs, which='SR')
-T = torch.from_numpy(T).float().to(device).requires_grad_(True)
-V = torch.from_numpy(V).float().to(device).requires_grad_(True)
+# xx = torch.einsum('ij,ij->i', X_sampled, X_sampled)
+# S = 2 * torch.mm(X_sampled, X_sampled.T) - xx.unsqueeze(1) - xx.unsqueeze(0)
 
-# Create KNN Eigenfunctions
-f = KnnExpansion()
-f.alpha = V
-f.knn = index
-f.k = 2
-f.sigma = torch.sqrt(lp.eps_/2)
+# # Training/Test points
+# num_train = 50
+# idx_train = torch.randint(X_sampled.shape[0], (num_train,))
+# X_train = X_sampled[idx_train, :]
+# Y_train = Y_sampled[idx_train]
+# num_test = 10
+# idx_test = torch.randint(X_sampled.shape[0], (num_test,))
+# X_test = X_sampled[idx_test, :]
+# Y_test = Y_sampled[idx_test]
 
-# Create Riemann Kernel
-kernel = RiemannMatern(lp.k_)
-# kernel = RiemannExp(lp.k_)
-kernel.eigenvalues = T
-kernel.eigenfunctions = f
+# # Build Diffusion Maps Laplacian
+# # index = faiss.IndexFlatL2(X_sampled.shape[1])
+# # index.train(X_sampled)
+# # index.add(X_sampled)
+# # k = 2
+# # distances, neighbors = index.search(X_sampled, k+1)
+# # distances = distances[:, 1:]
+# # neighbors = neighbors[:, 1:]
+# i = np.concatenate((np.repeat(np.arange(neighbors.shape[0]), neighbors.shape[1])[
+#     np.newaxis, :], neighbors.reshape(1, -1)), axis=0)
+# v = (X_sampled[i[0, :], :] - X_sampled[i[1, :], :]
+#      ).pow(2).sum(dim=1).div(-lp.eps_).exp()
+# L = torch.sparse_coo_tensor(
+#     i, v, (neighbors.shape[0], neighbors.shape[0])).to(device)
+# D = torch.sparse.sum(L, dim=1).pow(-1)
+# index_diag = torch.cat((D.indices(), D.indices()), dim=0)
+# D = torch.sparse_coo_tensor(index_diag, D.values(
+# ), (neighbors.shape[0], neighbors.shape[0])).to(device)
+# L = torch.sparse.mm(D, torch.sparse.mm(L, D))
+# D = torch.sparse.sum(L, dim=1).pow(-1)
+# D = torch.sparse_coo_tensor(index_diag, D.values(
+# ), (neighbors.shape[0], neighbors.shape[0])).to(device)
+# L = (torch.sparse_coo_tensor(index_diag, torch.ones(neighbors.shape[0]), (
+#     neighbors.shape[0], neighbors.shape[0])).to(device) - torch.sparse.mm(D, L))/(1/4*lp.eps_)
 
-# GPR Riemann
-gp_r = GaussianProcess().to(device)
-gp_r.samples = X_train.to(device)
-gp_r.target = Y_train.to(device)
-gp_r.kernel_ = kernel
-gp_r.signal = (lp.sigma_, True)
-gp_r.noise = (lp.sigma_n_.data, True)
-gp_r.update()
-# gp_r.train(10000)
+# # Get eigenvectors
+# num_eigs = 100
+# indices = L.coalesce().indices().cpu().detach().numpy()
+# values = L.coalesce().values().cpu().detach().numpy()
+# Ls = coo_matrix((values, (indices[0, :], indices[1, :])), shape=L.shape)
+# T, V = eigs(Ls, k=num_eigs, which='SR')
+# T = torch.from_numpy(T).float().to(device).requires_grad_(True)
+# V = torch.from_numpy(V).float().to(device).requires_grad_(True)
+
+# # Create KNN Eigenfunctions
+# f = KnnExpansion()
+# f.alpha = V
+# f.knn = index
+# f.k = 2
+# f.sigma = torch.sqrt(lp.eps_/2)
+
+# # Create Riemann Kernel
+# kernel = RiemannMatern(lp.k_)
+# # kernel = RiemannExp(lp.k_)
+# kernel.eigenvalues = T
+# kernel.eigenfunctions = f
+
+# # GPR Riemann
+# gp_r = GaussianProcess().to(device)
+# gp_r.samples = X_train.to(device)
+# gp_r.target = Y_train.to(device)
+# gp_r.kernel_ = kernel
+# gp_r.signal = (lp.sigma_, True)
+# gp_r.noise = (lp.sigma_n_.data, True)
+# gp_r.update()
+# # gp_r.train(10000)
 
 fig = plt.figure()
 ax = fig.add_subplot(111)
 ax.scatter(X[:, 0], X[:, 1])
-X_train = X_train.cpu().detach().numpy()
-ax.scatter(X_train[:, 0], X_train[:, 1], c="r", edgecolors="r")
+ax.scatter(X[0, 0], X[0, 1], c="r")
+ax.scatter(X[121, 0], X[121, 1], c="r")
+# X_train = X_train.cpu().detach().numpy()
+# ax.scatter(X_train[:, 0], X_train[:, 1], c="r", edgecolors="r")
 ax.axis('equal')
 
-fig = plt.figure()
-ax = fig.add_subplot(111)
-plot = ax.scatter(X[:, 0], X[:, 1], c=Y, vmin=-0.5, vmax=0.5)
-fig.colorbar(plot)
-ax.axis('equal')
-ax.set_title('Ground Truth')
+# fig = plt.figure()
+# ax = fig.add_subplot(111)
+# plot = ax.scatter(X[:, 0], X[:, 1], c=Y, vmin=-0.5, vmax=0.5)
+# fig.colorbar(plot)
+# ax.axis('equal')
+# ax.set_title('Ground Truth')
 
 
-fig = plt.figure()
-ax = fig.add_subplot(111)
-sol = gp_r(X_sampled).squeeze().cpu().detach().numpy()
-plot = ax.scatter(X[:, 0], X[:, 1], c=sol, vmin=-0.5, vmax=0.5)
-fig.colorbar(plot)
-ax.axis('equal')
-ax.set_title('Riemann GPR')
+# fig = plt.figure()
+# ax = fig.add_subplot(111)
+# sol = gp_r(X_sampled).squeeze().cpu().detach().numpy()
+# plot = ax.scatter(X[:, 0], X[:, 1], c=sol, vmin=-0.5, vmax=0.5)
+# fig.colorbar(plot)
+# ax.axis('equal')
+# ax.set_title('Riemann GPR')
 
-plt.show()
+# plt.show()
