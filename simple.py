@@ -45,8 +45,8 @@ from src.laplacian_knn import LaplacianKnn
 # np.savetxt('rsc/dumbbell.msh', np.concatenate((X, Y), axis=1))
 
 data = np.loadtxt('rsc/dumbbell.msh')
-X = data[:, :2]
-Y = data[:, -1][:, np.newaxis]
+X = data[:20, :2]
+Y = data[:20, -1][:, np.newaxis]
 
 use_cuda = False  # torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
@@ -63,37 +63,15 @@ distances = distances[:, 1:]
 neighbors = neighbors[:, 1:]
 
 lp = Laplacian(X_sampled)
-# for param in lp.parameters():
-#     if param.requires_grad:
-#         print(param.data)
 # lp.train(Y_sampled, 10000)
-# for param in lp.parameters():
-#     if param.requires_grad:
-#         print(param.data)
 for n, p in lp.named_parameters():
     print('Parameter name:', n)
     print(p.data)
 
 lp_knn = LaplacianKnn(neighbors, distances)
-
-# L = distances.div(-lp.eps_.data).exp()
-# D = L.sum(dim=1)
-# L = L.div(D.unsqueeze(1)).div(D[neighbors])
-# L = torch.cat((torch.ones(X_sampled.shape[0], 1), -L), dim=1)
-# L_indices = torch.cat(
-#     (torch.arange(X_sampled.shape[0]).unsqueeze(1), neighbors), dim=1)
-
-# # Similarity matrix
-# rows = torch.arange(L_indices.shape[0]).repeat_interleave(
-#     L_indices.shape[1]).unsqueeze(0)
-# cols = L_indices.reshape(1, -1)
-# values = L.reshape(1, -1).squeeze()
-# L_mat = torch.sparse_coo_tensor(
-#     torch.cat((rows, cols), dim=0), values, (L_indices.shape[0], L_indices.shape[0])).to_dense()
-# L_test = lp.forward()
-
-# xx = torch.einsum('ij,ij->i', X_sampled, X_sampled)
-# S = 2 * torch.mm(X_sampled, X_sampled.T) - xx.unsqueeze(1) - xx.unsqueeze(0)
+for n, p in lp_knn.named_parameters():
+    print('Parameter name:', n)
+    print(p.data)
 
 # # Training/Test points
 # num_train = 50
@@ -105,30 +83,28 @@ lp_knn = LaplacianKnn(neighbors, distances)
 # X_test = X_sampled[idx_test, :]
 # Y_test = Y_sampled[idx_test]
 
-# # Build Diffusion Maps Laplacian
-# # index = faiss.IndexFlatL2(X_sampled.shape[1])
-# # index.train(X_sampled)
-# # index.add(X_sampled)
-# # k = 2
-# # distances, neighbors = index.search(X_sampled, k+1)
-# # distances = distances[:, 1:]
-# # neighbors = neighbors[:, 1:]
-# i = np.concatenate((np.repeat(np.arange(neighbors.shape[0]), neighbors.shape[1])[
-#     np.newaxis, :], neighbors.reshape(1, -1)), axis=0)
-# v = (X_sampled[i[0, :], :] - X_sampled[i[1, :], :]
-#      ).pow(2).sum(dim=1).div(-lp.eps_).exp()
-# L = torch.sparse_coo_tensor(
-#     i, v, (neighbors.shape[0], neighbors.shape[0])).to(device)
-# D = torch.sparse.sum(L, dim=1).pow(-1)
-# index_diag = torch.cat((D.indices(), D.indices()), dim=0)
-# D = torch.sparse_coo_tensor(index_diag, D.values(
-# ), (neighbors.shape[0], neighbors.shape[0])).to(device)
-# L = torch.sparse.mm(D, torch.sparse.mm(L, D))
-# D = torch.sparse.sum(L, dim=1).pow(-1)
-# D = torch.sparse_coo_tensor(index_diag, D.values(
-# ), (neighbors.shape[0], neighbors.shape[0])).to(device)
-# L = (torch.sparse_coo_tensor(index_diag, torch.ones(neighbors.shape[0]), (
-#     neighbors.shape[0], neighbors.shape[0])).to(device) - torch.sparse.mm(D, L))/(1/4*lp.eps_)
+# Build Diffusion Maps Laplacian
+i = np.concatenate((np.repeat(np.arange(neighbors.shape[0]), neighbors.shape[1])[
+    np.newaxis, :], neighbors.reshape(1, -1)), axis=0)
+v = (X_sampled[i[0, :], :] - X_sampled[i[1, :], :]
+     ).pow(2).sum(dim=1).div(-lp.eps_).exp()
+L = torch.sparse_coo_tensor(
+    i, v, (neighbors.shape[0], neighbors.shape[0])).to(device)
+D = torch.sparse.sum(L, dim=1).pow(-1)
+index_diag = torch.cat((D.indices(), D.indices()), dim=0)
+D = torch.sparse_coo_tensor(index_diag, D.values(
+), (neighbors.shape[0], neighbors.shape[0])).to(device)
+L = torch.sparse.mm(D, torch.sparse.mm(L, D))
+D = torch.sparse.sum(L, dim=1).pow(-1)
+D = torch.sparse_coo_tensor(index_diag, D.values(
+), (neighbors.shape[0], neighbors.shape[0])).to(device)
+L = (torch.sparse_coo_tensor(index_diag, torch.ones(neighbors.shape[0]), (
+    neighbors.shape[0], neighbors.shape[0])).to(device) - torch.sparse.mm(D, L))/(1/4*lp.eps_)
+
+L = L.to_dense() + 2*lp_knn.nu_/lp_knn.k_**2*torch.eye(neighbors.shape[0])
+
+result = torch.dot(Y_sampled.squeeze(), torch.mv(
+    torch.matrix_power(L, lp_knn.nu_), Y_sampled.squeeze()))
 
 # # Get eigenvectors
 # num_eigs = 100
@@ -162,14 +138,14 @@ lp_knn = LaplacianKnn(neighbors, distances)
 # gp_r.update()
 # # gp_r.train(10000)
 
-fig = plt.figure()
-ax = fig.add_subplot(111)
-ax.scatter(X[:, 0], X[:, 1])
-ax.scatter(X[0, 0], X[0, 1], c="r")
-ax.scatter(X[121, 0], X[121, 1], c="r")
-# X_train = X_train.cpu().detach().numpy()
-# ax.scatter(X_train[:, 0], X_train[:, 1], c="r", edgecolors="r")
-ax.axis('equal')
+# fig = plt.figure()
+# ax = fig.add_subplot(111)
+# ax.scatter(X[:, 0], X[:, 1])
+# ax.scatter(X[0, 0], X[0, 1], c="r")
+# ax.scatter(X[121, 0], X[121, 1], c="r")
+# # X_train = X_train.cpu().detach().numpy()
+# # ax.scatter(X_train[:, 0], X_train[:, 1], c="r", edgecolors="r")
+# ax.axis('equal')
 
 # fig = plt.figure()
 # ax = fig.add_subplot(111)
