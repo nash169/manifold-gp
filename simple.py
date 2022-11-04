@@ -69,9 +69,9 @@ for n, p in lp.named_parameters():
     print(p.data)
 
 lp_knn = LaplacianKnn(neighbors, distances)
-for n, p in lp_knn.named_parameters():
-    print('Parameter name:', n)
-    print(p.data)
+# for n, p in lp_knn.named_parameters():
+#     print('Parameter name:', n)
+#     print(p.data)
 
 # # Training/Test points
 # num_train = 50
@@ -101,26 +101,26 @@ D = torch.sparse_coo_tensor(index_diag, D.values(
 L = (torch.sparse_coo_tensor(index_diag, torch.ones(neighbors.shape[0]), (
     neighbors.shape[0], neighbors.shape[0])).to(device) - torch.sparse.mm(D, L))/(1/4*lp.eps_)
 
-L = L.to_dense() + 2*lp_knn.nu_/lp_knn.k_**2*torch.eye(neighbors.shape[0])
+# L = L.to_dense() + 2*lp_knn.nu_/lp_knn.k_**2*torch.eye(neighbors.shape[0])
 
-result = torch.dot(Y_sampled.squeeze(), torch.mv(
-    torch.matrix_power(L, lp_knn.nu_), Y_sampled.squeeze()))
+# result = torch.dot(Y_sampled.squeeze(), torch.mv(
+#     torch.matrix_power(L, lp_knn.nu_), Y_sampled.squeeze()))
 
-# # Get eigenvectors
-# num_eigs = 100
-# indices = L.coalesce().indices().cpu().detach().numpy()
-# values = L.coalesce().values().cpu().detach().numpy()
-# Ls = coo_matrix((values, (indices[0, :], indices[1, :])), shape=L.shape)
-# T, V = eigs(Ls, k=num_eigs, which='SR')
-# T = torch.from_numpy(T).float().to(device).requires_grad_(True)
-# V = torch.from_numpy(V).float().to(device).requires_grad_(True)
+# Get eigenvectors
+num_eigs = 10
+indices = L.coalesce().indices().cpu().detach().numpy()
+values = L.coalesce().values().cpu().detach().numpy()
+Ls = coo_matrix((values, (indices[0, :], indices[1, :])), shape=L.shape)
+T, V = eigs(Ls, k=num_eigs, which='SR')
+T = torch.from_numpy(T).float().to(device).requires_grad_(True)
+V = torch.from_numpy(V).float().to(device).requires_grad_(True)
 
-# # Create KNN Eigenfunctions
-# f = KnnExpansion()
-# f.alpha = V
-# f.knn = index
-# f.k = 2
-# f.sigma = torch.sqrt(lp.eps_/2)
+# Create KNN Eigenfunctions
+f = KnnExpansion()
+f.alpha = V
+f.knn = index
+f.k = 2
+f.sigma = torch.sqrt(lp.eps_/2)
 
 # # Create Riemann Kernel
 # kernel = RiemannMatern(lp.k_)
