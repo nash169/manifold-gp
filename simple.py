@@ -17,6 +17,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import eigs
 from src.laplacian_knn import LaplacianKnn
 
+from matern_precision import MaternPrecision, PrecisionOperator
 
 # def ground_truth(X):
 #     import faiss
@@ -72,6 +73,8 @@ lp_knn = LaplacianKnn(neighbors, distances)
 # for n, p in lp_knn.named_parameters():
 #     print('Parameter name:', n)
 #     print(p.data)
+
+phi = PrecisionOperator(MaternPrecision(X_sampled, 2, 1))
 
 # # Training/Test points
 # num_train = 50
