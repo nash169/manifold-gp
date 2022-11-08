@@ -17,7 +17,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import eigs
 from src.laplacian_knn import LaplacianKnn
 
-from matern_precision import MaternPrecision, PrecisionOperator
+from src.matern_precision import MaternPrecision, PrecisionOperator
 
 # def ground_truth(X):
 #     import faiss
