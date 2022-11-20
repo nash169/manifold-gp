@@ -1,13 +1,8 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-from turtle import shape
 import torch
 import torch.nn as nn
-
-from src.utils import squared_exp
-from src.knn_expansion import KnnExpansion
-
 
 class RiemannExp(nn.Module):
     def __init__(self, l=1.):
