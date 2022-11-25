@@ -28,7 +28,7 @@ from src.operators.sparse_operator import SparseOperator
 
 class MaternPrecision(gpytorch.Module):
 
-    def __init__(self, X, k, nu=5, **kwargs):
+    def __init__(self, X, k, nu=5, taylor=3, **kwargs):
         super().__init__(**kwargs)
 
         if X.ndimension() == 1:
@@ -52,29 +52,32 @@ class MaternPrecision(gpytorch.Module):
         # Store smoothness hyperparameter
         self.nu_ = nu
 
+        # Expansion terms
+        self.taylor_ = taylor
+
         # Heat kernel length
         self.register_parameter(
-            name='raw_eps', parameter=torch.nn.Parameter(torch.tensor(0.1), requires_grad=True)
+            name='raw_eps', parameter=torch.nn.Parameter(torch.tensor(-1.), requires_grad=True)
         )
         self.register_constraint("raw_eps", Positive())
 
         # Riemann Matern kernel length
         self.register_parameter(
-            name='raw_length', parameter=torch.nn.Parameter(torch.tensor(1.), requires_grad=True)
+            name='raw_length', parameter=torch.nn.Parameter(torch.tensor(-1.), requires_grad=True)
         )
         self.register_constraint("raw_length", Positive())
 
         # Signal variance
         self.register_parameter(
-            name='raw_signal', parameter=torch.nn.Parameter(torch.tensor(1.), requires_grad=True)
+            name='raw_signal', parameter=torch.nn.Parameter(torch.tensor(-1.), requires_grad=True)
         )
         self.register_constraint("raw_signal", Positive())
 
-        # # Noise variance
-        # self.register_parameter(
-        #     name='raw_noise', parameter=torch.nn.Parameter(torch.tensor(1e-3))
-        # )
-        # self.register_constraint("raw_noise", Positive())
+        # Noise variance
+        self.register_parameter(
+            name='raw_noise', parameter=torch.nn.Parameter(torch.tensor(-5.))
+        )
+        self.register_constraint("raw_noise", Positive())
 
     @property
     def eps(self):
@@ -124,21 +127,21 @@ class MaternPrecision(gpytorch.Module):
         self.initialize(
             raw_signal=self.raw_signal_constraint.inverse_transform(value))
 
-    # @property
-    # def noise(self):
-    #     # when accessing the parameter, apply the constraint transform
-    #     return self.raw_noise_constraint.transform(self.raw_noise)
+    @property
+    def noise(self):
+        # when accessing the parameter, apply the constraint transform
+        return self.raw_noise_constraint.transform(self.raw_noise)
 
-    # @noise.setter
-    # def noise(self, value):
-    #     return self._set_noise(value)
+    @noise.setter
+    def noise(self, value):
+        return self._set_noise(value)
 
-    # def _set_noise(self, value):
-    #     if not torch.is_tensor(value):
-    #         value = torch.as_tensor(value).to(self.raw_noise)
-    #     # when setting the paramater, transform the actual value to a raw one by applying the inverse transform
-    #     self.initialize(
-    #         raw_noise=self.raw_noise_constraint.inverse_transform(value))
+    def _set_noise(self, value):
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value).to(self.raw_noise)
+        # when setting the paramater, transform the actual value to a raw one by applying the inverse transform
+        self.initialize(
+            raw_noise=self.raw_noise_constraint.inverse_transform(value))
 
     @property
     def dtype(self):
@@ -157,11 +160,17 @@ class MaternPrecision(gpytorch.Module):
             self.X_.shape[0], 1), -val.div(val.sum(dim=1).unsqueeze(1))), dim=1)*4/self.eps
         val[:, 0] += 2*self.nu_/self.length**2
 
-        for _ in range(self.nu_):
+        y = torch.zeros_like(x).to(x.device)
+
+        for iter in range(1, self.nu_*self.taylor_+1):
             x = torch.sum(
                 val * x[self.idx_].permute(2, 0, 1), dim=2).t()
-
-        return self.signal**2*x
+            if (iter % self.nu_ == 0):
+                power = iter/self.nu_
+                y += pow(-1, power + 1)*self.signal.pow(-2*power) * \
+                    self.noise.pow(2*(power-1))*x
+        return y
+        # return self.signal**2*x
 
     def laplacian(self):
         val = self.val_.div(-self.eps).exp()
@@ -170,7 +179,8 @@ class MaternPrecision(gpytorch.Module):
         val = torch.cat((torch.ones(
             self.X_.shape[0], 1), -val.div(val.sum(dim=1).unsqueeze(1))), dim=1)*4/self.eps
 
-        rows = torch.arange(self.idx_.shape[0]).repeat_interleave(self.idx_.shape[1]).unsqueeze(0)
+        rows = torch.arange(self.idx_.shape[0]).repeat_interleave(
+            self.idx_.shape[1]).unsqueeze(0)
         cols = self.idx_.reshape(1, -1)
         val = val.reshape(1, -1).squeeze()
 
