@@ -5,6 +5,9 @@ import faiss.contrib.torch_utils
 from gpytorch.constraints import Positive
 from src.operators.sparse_operator import SparseOperator
 # from linear_operator import LinearOperator
+from src.operators.wrap_operator import WrapOperator
+
+from linear_operator import settings, utils
 
 
 # class PrecisionOperator(LinearOperator):
@@ -152,25 +155,97 @@ class MaternPrecision(gpytorch.Module):
     def to_operator(self):
         return SparseOperator(self.X_, self)
 
-    def forward(self, x, **params):
+    def precision_matrix(self, x, labels):
         val = self.val_.div(-self.eps).exp()
         deg = val.sum(dim=1)
-        val = val.div(deg.unsqueeze(1)).div(deg[self.idx_[:, 1:]])
-        val = torch.cat((torch.ones(
-            self.X_.shape[0], 1), -val.div(val.sum(dim=1).unsqueeze(1))), dim=1)*4/self.eps
-        val[:, 0] += 2*self.nu_/self.length**2
+        val = val.div(deg.sqrt().unsqueeze(1)).div(deg.sqrt()[self.idx_[:, 1:]])
+        val = torch.cat((torch.ones(self.X_.shape[0], 1) +  2*self.nu_/self.length**2, -val), dim=1)
 
-        y = torch.zeros_like(x).to(x.device)
+        matmul = lambda x : torch.sum(val * x[self.idx_].permute(2, 0, 1), dim=2).t()
 
-        for iter in range(1, self.nu_*self.taylor_+1):
-            x = torch.sum(
-                val * x[self.idx_].permute(2, 0, 1), dim=2).t()
-            if (iter % self.nu_ == 0):
-                power = iter/self.nu_
-                y += pow(-1, power + 1)*self.signal.pow(-2*power) * \
-                    self.noise.pow(2*(power-1))*x
-        return y
-        # return self.signal**2*x
+        if labels is not None:
+            labaled = torch.zeros(self.X_.shape[0], x.shape[1])
+            labaled[labels,:] = 1.0
+
+            not_labaled = torch.ones(self.X_.shape[0], x.shape[1])
+            not_labaled[labels,:] = 0.0
+
+            y = torch.zeros(self.X_.shape[0], x.shape[1])
+            y[labels, :] = x
+
+            for iter in range(self.nu_):
+                y = matmul(y)
+
+            Q_xx = y[labels, :]
+            opt = WrapOperator(val, self.idx_,self.size_)
+            # y *= not_labaled
+            y[labels,:] = 0.0
+
+            for iter in range(self.nu_):
+                y = opt.solve(y)
+
+            z = y*not_labaled
+
+            for iter in range(1, self.nu_):
+                z = matmul(z)
+
+            return (Q_xx + z[labels,:])/self.signal**2
+        else:
+            y = x
+
+            for iter in range(0, self.nu_):
+                y = torch.sum(
+                    val * y[self.idx_].permute(2, 0, 1), dim=2).t()
+                
+            return y
+
+    def forward(self, x, labels=None, **params):
+        return self.precision_matrix(x - self.noise.pow(2)*self.precision_matrix(x + self.noise.pow(4)*self.precision_matrix(x, labels), labels), labels)
+
+    # def forward(self, x, labels=None, **params):
+    #     val = self.val_.div(-self.eps).exp()
+    #     deg = val.sum(dim=1)
+    #     # val = val.div(deg.unsqueeze(1)).div(deg[self.idx_[:, 1:]])
+    #     # val = torch.cat((torch.ones(
+    #     #     self.X_.shape[0], 1), -val.div(val.sum(dim=1).unsqueeze(1))), dim=1)*4/self.eps
+    #     val = val.div(deg.sqrt().unsqueeze(1)).div(
+    #         deg.sqrt()[self.idx_[:, 1:]])
+    #     val = torch.cat((torch.ones(self.X_.shape[0], 1), -val), dim=1)
+    #     val[:, 0] += 2*self.nu_/self.length**2
+
+    #     if labels is not None:
+    #         y = torch.zeros(self.X_.shape[0], x.shape[1])
+    #         y[labels, :] = x
+
+    #         for iter in range(self.nu_):
+    #             y = torch.sum(
+    #                 val * y[self.idx_].permute(2, 0, 1), dim=2).t()
+
+    #         Q_xx = y[labels, :]
+    #         y[labels,:] = 0.0
+    #         opt = WrapOperator(val, self.idx_,self.size_)
+
+    #         for iter in range(self.nu_):
+    #             y = opt.solve(y)
+
+    #         y[labels,:] = 0.0
+
+    #         for iter in range(1, self.nu_):
+    #             y = torch.sum(
+    #                 val * y[self.idx_].permute(2, 0, 1), dim=2).t()
+
+    #         return (Q_xx + y[labels])/self.signal**2
+    #     else:
+    #         y = torch.zeros_like(x).to(x.device)
+
+    #         for iter in range(1, self.nu_*self.taylor_+1):
+    #             x = torch.sum(
+    #                 val * x[self.idx_].permute(2, 0, 1), dim=2).t()
+    #             if (iter % self.nu_ == 0):
+    #                 power = iter/self.nu_
+    #                 y += pow(-1, power + 1)*self.signal.pow(-2*power) * \
+    #                     self.noise.pow(2*(power-1))*x
+    #         return y
 
     def laplacian(self):
         val = self.val_.div(-self.eps).exp()
@@ -185,3 +260,6 @@ class MaternPrecision(gpytorch.Module):
         val = val.reshape(1, -1).squeeze()
 
         return torch.sparse_coo_tensor(torch.cat((rows, cols), dim=0), val, (self.idx_.shape[0], self.idx_.shape[0]))
+
+    def _base(self, x, values, indices):
+        return torch.sum(values * x[indices].permute(2, 0, 1), dim=2).t()

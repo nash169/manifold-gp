@@ -66,20 +66,20 @@ model = MaternPrecision(X_sampled, k, nu)
 model.train()  # Basically it clears the cache
 
 # Training
-training_iter = 5000
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-1)
+training_iter = 100
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-with settings.fast_computations(log_prob=False) and settings.max_cholesky_size(300):
+with settings.fast_computations(log_prob=False) and settings.max_cholesky_size(300) and torch.autograd.set_detect_anomaly(True):
     for i in range(training_iter):
         # Zero gradients from previous iteration
         optimizer.zero_grad()
 
         # Output from model
-        output = model(Y_noisy)
+        output = model(Y_train,idx_train)
 
         # Calc loss and backprop gradients
-        loss = 0.5 * sum([torch.dot(Y_noisy.squeeze(), output.squeeze()),
-                          -model.to_operator().inv_quad_logdet(logdet=True)[1], Y_noisy.size(-1) * math.log(2 * math.pi)])
+        loss = 0.5 * sum([torch.dot(Y_train.squeeze(), output.squeeze()),
+                          -model.to_operator().inv_quad_logdet(logdet=True)[1], Y_train.size(-1) * math.log(2 * math.pi)])
         loss.backward()
 
         # Print step information
@@ -88,115 +88,115 @@ with settings.fast_computations(log_prob=False) and settings.max_cholesky_size(3
         # Step
         optimizer.step()
 
-# Laplacian & Extract Eigenvectors
-L = model.laplacian()
+# # Laplacian & Extract Eigenvectors
+# L = model.laplacian()
 
-indices = L.coalesce().indices().cpu().detach().numpy()
-values = L.coalesce().values().cpu().detach().numpy()
-Ls = coo_matrix((values, (indices[0, :], indices[1, :])), shape=L.shape)
+# indices = L.coalesce().indices().cpu().detach().numpy()
+# values = L.coalesce().values().cpu().detach().numpy()
+# Ls = coo_matrix((values, (indices[0, :], indices[1, :])), shape=L.shape)
 
-num_eigs = 10
-T, V = eigs(Ls, k=num_eigs, which='SR')
+# num_eigs = 10
+# T, V = eigs(Ls, k=num_eigs, which='SR')
 
-T = torch.from_numpy(T).float().to(device).requires_grad_(True)
-V = torch.from_numpy(V).float().to(device).requires_grad_(True)
+# T = torch.from_numpy(T).float().to(device).requires_grad_(True)
+# V = torch.from_numpy(V).float().to(device).requires_grad_(True)
 
-# Create KNN Eigenfunctions
-f = KnnExpansion()
-f.alpha = V
-f.knn = model.knn_
-f.k = k
-f.sigma = torch.sqrt(model.eps/2)
+# # Create KNN Eigenfunctions
+# f = KnnExpansion()
+# f.alpha = V
+# f.knn = model.knn_
+# f.k = k
+# f.sigma = torch.sqrt(model.eps/2)
 
-# Create Riemann Kernel
-kernel = RiemannKNN((T, f), nu, 1)
-kernel.length = model.length
-kernel.signal = model.signal
+# # Create Riemann Kernel
+# kernel = RiemannKNN((T, f), nu, 1)
+# kernel.length = model.length
+# kernel.signal = model.signal
 
-# Create GP model
-likelihood = gpytorch.likelihoods.GaussianLikelihood()
-# likelihood.noise = torch.tensor(1e-3)
-likelihood.noise = model.noise
-gp_model = ExactGP(X_train, Y_train.squeeze(), likelihood, kernel)
+# # Create GP model
+# likelihood = gpytorch.likelihoods.GaussianLikelihood()
+# # likelihood.noise = torch.tensor(1e-3)
+# likelihood.noise = model.noise
+# gp_model = ExactGP(X_train, Y_train.squeeze(), likelihood, kernel)
 
-# Evaluation
-gp_model.eval()
-likelihood.eval()
-
-
-# with torch.no_grad(), gpytorch.settings.fast_pred_var():
-#     observed_pred = likelihood(gp_model(X_sampled))
-
-f_preds = gp_model(X_sampled)
-y_preds = likelihood(gp_model(X_sampled))
+# # Evaluation
+# gp_model.eval()
+# likelihood.eval()
 
 
-# f_mean = f_preds.mean
-# f_var = f_preds.variance
-# f_covar = f_preds.covariance_matrix
-# f_samples = f_preds.sample(sample_shape=torch.Size(1000,))
+# # with torch.no_grad(), gpytorch.settings.fast_pred_var():
+# #     observed_pred = likelihood(gp_model(X_sampled))
 
-with torch.no_grad():
-    # # Initialize plot
-    # f, ax = plt.subplots(1, 1, figsize=(4, 3))
+# f_preds = gp_model(X_sampled)
+# y_preds = likelihood(gp_model(X_sampled))
 
-    # Get upper and lower confidence bounds
-    # pred = observed_pred.mean.numpy()
-    # lower, upper = observed_pred.confidence_region()
-    mean = f_preds.mean
-    std = f_preds.variance.sqrt()
 
-    fig = plt.figure()
-    ax = fig.add_subplot(231)
-    ax.scatter(X_sampled[:, 0], X_sampled[:, 1])
-    ax.scatter(X_sampled[0, 0], X_sampled[0, 1], c='k')
-    X_train = X_train.cpu().detach().numpy()
-    ax.scatter(X_train[:, 0], X_train[:, 1], c="r", edgecolors="r")
-    ax.axis('equal')
-    ax.set_title('Training Points')
+# # f_mean = f_preds.mean
+# # f_var = f_preds.variance
+# # f_covar = f_preds.covariance_matrix
+# # f_samples = f_preds.sample(sample_shape=torch.Size(1000,))
 
-    ax = fig.add_subplot(232)
-    plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1],
-                      c=Y_sampled, vmin=-0.5, vmax=0.5)
-    fig.colorbar(plot)
-    ax.axis('equal')
-    ax.set_title('Ground Truth')
+# with torch.no_grad():
+#     # # Initialize plot
+#     # f, ax = plt.subplots(1, 1, figsize=(4, 3))
 
-    # fig = plt.figure()
-    ax = fig.add_subplot(233)
-    plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1],
-                      c=mean, vmin=-0.5, vmax=0.5)
-    fig.colorbar(plot)
-    ax.axis('equal')
-    ax.set_title('Mean')
+#     # Get upper and lower confidence bounds
+#     # pred = observed_pred.mean.numpy()
+#     # lower, upper = observed_pred.confidence_region()
+#     mean = f_preds.mean
+#     std = f_preds.variance.sqrt()
 
-    ax = fig.add_subplot(234)
-    # ax.scatter(X[:, 0], X[:, 1])
-    # X_test = X_test.cpu().detach().numpy()
-    # ax.scatter(X_test[:, 0], X_test[:, 1], c="r", edgecolors="r")
-    # ax.axis('equal')
-    ax.plot(range(X_sampled.shape[0]), Y_sampled,
-            linestyle='dashed', color="black")
-    ax.scatter(idx_train, Y_train)
-    ax.plot(range(X_sampled.shape[0]), mean)
-    ax.fill_between(
-        range(X_sampled.shape[0]), mean-std.numpy(), mean+std.numpy(), alpha=0.5)
-    ax.set_title('Riemann GPR')
+#     fig = plt.figure()
+#     ax = fig.add_subplot(231)
+#     ax.scatter(X_sampled[:, 0], X_sampled[:, 1])
+#     ax.scatter(X_sampled[0, 0], X_sampled[0, 1], c='k')
+#     X_train = X_train.cpu().detach().numpy()
+#     ax.scatter(X_train[:, 0], X_train[:, 1], c="r", edgecolors="r")
+#     ax.axis('equal')
+#     ax.set_title('Training Points')
 
-    # fig = plt.figure()
-    ax = fig.add_subplot(235)
-    # , vmin=-0.5, vmax=0.5)
-    plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1], c=mean-std)
-    fig.colorbar(plot)
-    ax.axis('equal')
-    ax.set_title('Mean - Standard Deviation')
+#     ax = fig.add_subplot(232)
+#     plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1],
+#                       c=Y_sampled, vmin=-0.5, vmax=0.5)
+#     fig.colorbar(plot)
+#     ax.axis('equal')
+#     ax.set_title('Ground Truth')
 
-    # fig = plt.figure()
-    ax = fig.add_subplot(236)
-    # , vmin=-0.5, vmax=0.5)
-    plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1], c=mean+std)
-    fig.colorbar(plot)
-    ax.axis('equal')
-    ax.set_title('Mean + Standard Deviation')
+#     # fig = plt.figure()
+#     ax = fig.add_subplot(233)
+#     plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1],
+#                       c=mean, vmin=-0.5, vmax=0.5)
+#     fig.colorbar(plot)
+#     ax.axis('equal')
+#     ax.set_title('Mean')
 
-    plt.show()
+#     ax = fig.add_subplot(234)
+#     # ax.scatter(X[:, 0], X[:, 1])
+#     # X_test = X_test.cpu().detach().numpy()
+#     # ax.scatter(X_test[:, 0], X_test[:, 1], c="r", edgecolors="r")
+#     # ax.axis('equal')
+#     ax.plot(range(X_sampled.shape[0]), Y_sampled,
+#             linestyle='dashed', color="black")
+#     ax.scatter(idx_train, Y_train)
+#     ax.plot(range(X_sampled.shape[0]), mean)
+#     ax.fill_between(
+#         range(X_sampled.shape[0]), mean-std.numpy(), mean+std.numpy(), alpha=0.5)
+#     ax.set_title('Riemann GPR')
+
+#     # fig = plt.figure()
+#     ax = fig.add_subplot(235)
+#     # , vmin=-0.5, vmax=0.5)
+#     plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1], c=mean-std)
+#     fig.colorbar(plot)
+#     ax.axis('equal')
+#     ax.set_title('Mean - Standard Deviation')
+
+#     # fig = plt.figure()
+#     ax = fig.add_subplot(236)
+#     # , vmin=-0.5, vmax=0.5)
+#     plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1], c=mean+std)
+#     fig.colorbar(plot)
+#     ax.axis('equal')
+#     ax.set_title('Mean + Standard Deviation')
+
+#     plt.show()
