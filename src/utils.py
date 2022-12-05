@@ -10,11 +10,12 @@ from mayavi import mlab
 
 
 # Build ground truth on the mesh
-def build_ground_truth(mesh_file):
+def groundtruth_from_mesh(mesh_file):
     import trimesh
     # Load mesh
     if os.path.splitext(mesh_file)[1] == '.msh':
-        mesh = trimesh.load_mesh(trimesh.interfaces.gmsh.load_gmsh(mesh_file))
+        mesh = trimesh.load_mesh(
+            trimesh.interfaces.gmsh.load_gmsh(mesh_file))
     else:
         mesh = trimesh.load(mesh_file)
 
@@ -42,6 +43,39 @@ def build_ground_truth(mesh_file):
         ground_truth[i] = 2 * np.sin(geodesics.get(i) * period + 0.3)
 
     return mesh.vertices, mesh.faces, ground_truth
+
+
+def groundtruth_from_samples(X):
+    import faiss
+    index = faiss.IndexFlatL2(X.shape[1])
+    index.train(X)
+    index.add(X)
+    distances, neighbors = index.search(X, 3)
+
+    graph = nx.Graph()
+    for i in range(X.shape[0]):
+        graph.add_node(i, pos=(X[i, 0], X[i, 1]))
+    for i in range(X.shape[0]):
+        graph.add_edge(i, neighbors[i, 1], length=distances[i, 1])
+        graph.add_edge(i, neighbors[i, 2], length=distances[i, 2])
+
+    geodesics = nx.shortest_path_length(graph, source=0, weight='length')
+    Y = np.zeros((X.shape[0]))
+    for i in range(X.shape[0]):
+        Y[i] = 0.5*np.sin(5e2 * geodesics.get(i)**2)
+
+    return Y
+
+
+def reduce_mesh(mesh_file):
+    import trimesh
+
+    mesh = trimesh.load_mesh(
+        trimesh.interfaces.gmsh.load_gmsh("rsc/dragon.msh"))
+
+    mesh = mesh.simplify_quadratic_decimation(10000)
+
+    mesh.export('rsc/dragon_red.msh')
 
 
 def load_mesh(mesh_file):
@@ -80,36 +114,3 @@ def edge_probability(x, y, t=1):
     yy = torch.einsum('ij,ij->i', y, y).unsqueeze(0)
     k = -2 * torch.mm(x, y.T) + xx + yy
     return torch.exp(t*k)
-
-
-def lanczos(A, v, iter=None):
-    # Set number of iterations
-    if iter is None:
-        iter = v.size(0)
-
-    # Create matrix for the Hamiltonian in Krylov subspace
-    T = torch.zeros((iter, iter)).to(A.device)
-    V = torch.zeros((v.size(0), iter)).to(A.device)
-
-    # First step
-    w = torch.mm(A, v)
-    alpha = torch.mm(w.t(), v)
-    w = w - alpha * v
-
-    # Store
-    T[0, 0] = alpha
-    V[:, 0] = v.squeeze()
-
-    for j in torch.arange(1, iter):
-        beta = torch.linalg.norm(w)
-        v = w/beta
-        w = torch.mm(A, v)
-        alpha = torch.mm(w.t(), v)
-        w = w - alpha * v - beta*V[:, j-1].unsqueeze(1)
-
-        T[j, j] = alpha
-        T[j-1, j] = beta
-        T[j, j-1] = beta
-        V[:, j] = v.squeeze()
-
-    return T, V

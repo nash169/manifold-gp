@@ -1,51 +1,74 @@
-#!/usr/bin/env pythonnu_
+#!/usr/bin/env python
 # encoding: utf-8
 
 import torch
-import torch.nn as nn
+import gpytorch
+from gpytorch.constraints import Positive
 
 
-class RiemannMatern(nn.Module):
-    def __init__(self, l=1.):
-        super(RiemannMatern, self).__init__()
+class RiemannMatern(gpytorch.kernels.Kernel):
+    is_stationary = True
 
-        self.k_ = nn.Parameter(torch.tensor(l), requires_grad=True)
+    def __init__(self, eigpairs, nu=5, d=1, **kwargs):
+        super().__init__(**kwargs)
 
-        self.nu_ = 5
+        # Store smoothness and dimension parameters
+        self.nu_ = nu
+        self.d_ = d
 
-        self.d_ = 1.0
+        # Store eigenvalues
+        self.eigval_ = eigpairs[0]
 
-    def spectral(self):
-        s = (2*self.nu_ / self.k**2 +
-             self.eigenvalues).pow(-self.nu_ - self.d_/2)
-        return s/s.sum()
+        # Store eigenfunctions
+        self.eigfun_ = eigpairs[1]
 
-    def forward(self, x, y):
-        return torch.mm(self.eigenfunctions(x).T, self.spectral().unsqueeze(1)*self.eigenfunctions(y))
+        # register the raw parameter and the constraint
+        self.register_parameter(
+            name='raw_length', parameter=torch.nn.Parameter(torch.tensor(1.))
+        )
+        self.register_constraint("raw_length", Positive())
 
-    # Sigma variance
+        # register the raw parameter and the constraint
+        self.register_parameter(
+            name='raw_signal', parameter=torch.nn.Parameter(torch.tensor(1.))
+        )
+        self.register_constraint("raw_signal", Positive())
+
     @property
-    def k(self):
-        return self.k_
+    def length(self):
+        # when accessing the parameter, apply the constraint transform
+        return self.raw_length_constraint.transform(self.raw_length)
 
-    @k.setter
-    def k(self, value):
-        self.k_ = nn.Parameter(value[0], requires_grad=value[1])
+    @length.setter
+    def length(self, value):
+        return self._set_length(value)
 
-    # Eigenvalues
+    def _set_length(self, value):
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value).to(self.raw_length)
+        # when setting the paramater, transform the actual value to a raw one by applying the inverse transform
+        self.initialize(
+            raw_length=self.raw_length_constraint.inverse_transform(value))
+
     @property
-    def eigenvalues(self):
-        return self.eigenvalues_
+    def signal(self):
+        # when accessing the parameter, apply the constraint transform
+        return self.raw_signal_constraint.transform(self.raw_signal)
 
-    @eigenvalues.setter
-    def eigenvalues(self, value):
-        self.eigenvalues_ = value
+    @signal.setter
+    def signal(self, value):
+        return self._set_signal(value)
 
-    # Eigenfunction
-    @property
-    def eigenfunctions(self):
-        return self.eigenfunctions_
+    def _set_signal(self, value):
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value).to(self.raw_signal)
+        # when setting the paramater, transform the actual value to a raw one by applying the inverse transform
+        self.initialize(
+            raw_signal=self.raw_signal_constraint.inverse_transform(value))
 
-    @eigenfunctions.setter
-    def eigenfunctions(self, value):
-        self.eigenfunctions_ = value
+    def forward(self, x1, x2, **params):
+        s = self.signal**2*(2*self.nu_ / self.length**2 +
+             self.eigval_).pow(-self.nu_ - self.d_/2)
+        s/=s.sum()
+
+        return torch.mm(self.eigfun_(x1).T, s.unsqueeze(1)*self.eigfun_(x2))

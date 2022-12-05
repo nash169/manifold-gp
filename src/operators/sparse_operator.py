@@ -7,40 +7,14 @@ from typing import Union
 
 
 class SparseOperator(LinearOperator):
-    def __init__(self, X, module):
-        super(SparseOperator, self).__init__(X, module=module)
-
-        self.X_ = X
-        self.module_ = module
-
-        # super().settings.fast_computations(log_prob=True)
-
-        # self._set_requires_grad(True)
-
-    # @property
-    # def dtype(self):
-    #     return self.module_.dtype
-
-    # @property
-    # def device(self):
-    #     return self.X_.device
-
-    # @property
-    # def requires_grad(self):
-    #     return super().requires_grad or any(param.requires_grad for param in self.module_.parameters())
-
-    # def _set_requires_grad(self, val):
-    #     super()._set_requires_grad(val)
-    #     # The behavior that differs from the base LinearOperator setter
-    #     for param in self.module_.parameters():
-    #         param.requires_grad_(val)
-
-    def _matmul(self, x):
-        y = x
-        return self.module_(y)
+    def __init__(self, values, indices, size):
+        super(SparseOperator, self).__init__(values,indices,size=size)
 
     def _size(self):
-        return self.module_.size_
+        return self._kwargs['size']
+
+    def _matmul(self, x):
+        return torch.sum(self._args[0] * x[self._args[1]].permute(2, 0, 1), dim=2).t()
 
     def _transpose_nonbatch(self):
         return self
