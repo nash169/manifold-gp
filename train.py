@@ -23,7 +23,7 @@ from scipy.sparse.linalg import eigs
 file = 'rsc/dumbbell.msh'  # 'rsc/dragon10k.stl'
 
 # Define scenario
-supervised, function_noise, manifold_noise = True, False, False
+supervised, function_noise, manifold_noise = True, True, True
 
 # Set cuda
 use_cuda = False  # torch.cuda.is_available()
@@ -85,16 +85,16 @@ X_test = X_sampled[idx_test, :]
 Y_test = Y_sampled[idx_test]
 
 # Precision matrix model
-k = 4
+k = 50
 nu = 2
 model = MaternPrecision(X_sampled, k, nu)
 model.train()  # Basically it clears the cache
 
 # Training
-training_iter = 5000
+training_iter = 500
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-1)
 
-with settings.fast_computations(log_prob=False) and settings.max_cholesky_size(200) and torch.autograd.set_detect_anomaly(True):
+with settings.fast_computations(log_prob=False) and settings.max_cholesky_size(300) and torch.autograd.set_detect_anomaly(True):
     for i in range(training_iter):
         # Zero gradients from previous iteration
         optimizer.zero_grad()
@@ -203,7 +203,7 @@ with torch.no_grad():
         # fig = plt.figure()
         ax = fig.add_subplot(235)
         # , vmin=-0.5, vmax=0.5)
-        plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1], c=mean-std)
+        plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1], c=std)
         fig.colorbar(plot)
         ax.axis('equal')
         ax.set_title('Mean - Standard Deviation')
@@ -211,7 +211,7 @@ with torch.no_grad():
         # fig = plt.figure()
         ax = fig.add_subplot(236)
         # , vmin=-0.5, vmax=0.5)
-        plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1], c=mean+std)
+        plot = ax.scatter(X_sampled[:, 0], X_sampled[:, 1], c=std)
         fig.colorbar(plot)
         ax.axis('equal')
         ax.set_title('Mean + Standard Deviation')

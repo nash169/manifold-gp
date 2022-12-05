@@ -7,6 +7,7 @@ from gpytorch.constraints import Positive
 from src.operators.sparse_operator import SparseOperator
 from src.operators.module_operator import ModuleOperator
 
+
 class MaternPrecision(gpytorch.Module):
 
     def __init__(self, X, k, nu=5, taylor=3, **kwargs):
@@ -38,7 +39,7 @@ class MaternPrecision(gpytorch.Module):
 
         # Heat kernel length
         self.register_parameter(
-            name='raw_eps', parameter=torch.nn.Parameter(torch.tensor(-1.), requires_grad=True)
+            name='raw_eps', parameter=torch.nn.Parameter(torch.tensor(-2.), requires_grad=True)
         )
         self.register_constraint("raw_eps", Positive())
 
@@ -134,58 +135,66 @@ class MaternPrecision(gpytorch.Module):
         return ModuleOperator(self.X_, self)
 
     def precision_matrix(self, x, labels):
-        val = self.val_.div(-self.eps).exp()
+        val = self.val_.div(-self.eps**2).exp()
         deg = val.sum(dim=1)
-        val = val.div(deg.sqrt().unsqueeze(1)).div(deg.sqrt()[self.idx_[:, 1:]])
-        val = torch.cat((torch.ones(self.X_.shape[0], 1) +  2*self.nu_/self.length**2, -val), dim=1)
+        val = val.div(deg.sqrt().unsqueeze(1)).div(
+            deg.sqrt()[self.idx_[:, 1:]])
+        val = torch.cat(
+            (torch.ones(self.X_.shape[0], 1) + 2*self.nu_/self.length**2, -val), dim=1)
 
-        matmul = lambda x : torch.sum(val * x[self.idx_].permute(2, 0, 1), dim=2).t()
+        def matmul(x): return torch.sum(
+            val * x[self.idx_].permute(2, 0, 1), dim=2).t()
 
         if labels is not None:
             labaled = torch.zeros(self.X_.shape[0], x.shape[1])
-            labaled[labels,:] = 1.0
+            labaled[labels, :] = 1.0
 
             not_labaled = torch.ones(self.X_.shape[0], x.shape[1])
-            not_labaled[labels,:] = 0.0
+            not_labaled[labels, :] = 0.0
 
             y = torch.zeros(self.X_.shape[0], x.shape[1])
             y[labels, :] = x
 
-            for iter in range(self.nu_):
+            for _ in range(self.nu_):
                 y = matmul(y)
 
             Q_xx = y[labels, :]
-            opt = SparseOperator(val, self.idx_,self.size_)
+            opt = SparseOperator(val, self.idx_, self.size_)
             # y *= not_labaled
-            y[labels,:] = 0.0
+            y[labels, :] = 0.0
 
-            for iter in range(self.nu_):
+            for _ in range(self.nu_):
                 y = opt.solve(y)
 
             z = y*not_labaled
 
-            for iter in range(1, self.nu_):
+            for _ in range(1, self.nu_):
                 z = matmul(z)
 
-            return (Q_xx + z[labels,:])/self.signal**2
+            return (Q_xx + z[labels, :])/self.signal**2
         else:
             y = x
 
             for iter in range(0, self.nu_):
                 y = torch.sum(
                     val * y[self.idx_].permute(2, 0, 1), dim=2).t()
-                
+
             return y
 
     def forward(self, x, labels=None, **params):
         return self.precision_matrix(x - self.noise.pow(2)*self.precision_matrix(x + self.noise.pow(4)*self.precision_matrix(x, labels), labels), labels)
 
     def laplacian(self):
-        val = self.val_.div(-self.eps).exp()
+        val = self.val_.div(-self.eps**2).exp()
         deg = val.sum(dim=1)
-        val = val.div(deg.unsqueeze(1)).div(deg[self.idx_[:, 1:]])
-        val = torch.cat((torch.ones(
-            self.X_.shape[0], 1), -val.div(val.sum(dim=1).unsqueeze(1))), dim=1)*4/self.eps
+        val = val.div(deg.sqrt().unsqueeze(1)).div(
+            deg.sqrt()[self.idx_[:, 1:]])
+        val = torch.cat((torch.ones(self.X_.shape[0], 1), -val), dim=1)
+        # val = self.val_.div(-self.eps**2).exp()
+        # deg = val.sum(dim=1)
+        # val = val.div(deg.unsqueeze(1)).div(deg[self.idx_[:, 1:]])
+        # val = torch.cat((torch.ones(
+        #     self.X_.shape[0], 1), -val.div(val.sum(dim=1).unsqueeze(1))), dim=1)*4/self.eps
 
         rows = torch.arange(self.idx_.shape[0]).repeat_interleave(
             self.idx_.shape[1]).unsqueeze(0)

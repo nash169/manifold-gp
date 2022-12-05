@@ -60,13 +60,13 @@ loss_log = np.zeros((manifold_noise.shape[0], function_noise.shape[0]))
 
 for count_m, noise_m in enumerate(manifold_noise):
     # Add noise to manifold
-    X_noisy = X_sampled + 0.01 * \
+    X_noisy = X_sampled + noise_m * \
         torch.randn(X_sampled.shape[0], n)
     for count_f, noise_f in enumerate(function_noise):
         print(
             f"Iteration: {counter}/{manifold_noise.shape[0]*function_noise.shape[0]}, Manifold noise: {noise_m:0.3f}, Function noise: {noise_f:0.3f}")
         # Add noise to function
-        Y_noisy = Y_sampled + 0.01 * \
+        Y_noisy = Y_sampled + noise_f * \
             torch.randn(m, 1)
 
         # Training points
