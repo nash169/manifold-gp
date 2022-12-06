@@ -1,19 +1,23 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
+from typing import Optional
+
 import torch
 import torch.nn as nn
 
 import faiss
 import faiss.contrib.torch_utils
 
+from src.utils.bases import radial_basis
+
 
 class KnnExpansion(nn.Module):
-    def __init__(self):
+    def __init__(self, knn, neighbors: Optional[int] = 2):
         super(KnnExpansion, self).__init__()
 
-        # Default neighborhoods
-        self.k_ = 10
+        self.knn
+        self.neighbors = neighbors
 
     def forward(self, x):
         d, i = self.knn.search(x, self.k)

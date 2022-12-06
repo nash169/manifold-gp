@@ -24,11 +24,11 @@ file = 'rsc/dumbbell.msh'  # 'rsc/dragon10k.stl'
 
 # Define scenario
 supervised = True
-function_noise = torch.linspace(0, 0.5, 5)
-manifold_noise = torch.linspace(0, 0.5, 5)
+function_noise = torch.linspace(0, 0.05, 5)
+manifold_noise = torch.linspace(0, 0.05, 5)
 
 # Set cuda
-use_cuda = False  # torch.cuda.is_available()
+use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
 # Load data
@@ -47,9 +47,9 @@ except:
 
 # Training & Test indices
 num_train = 50
-idx_train = torch.randint(m, (num_train,))
+idx_train = torch.randint(m, (num_train,)).to(device)
 num_test = 10
-idx_test = torch.randint(m, (num_test,))
+idx_test = torch.randint(m, (num_test,)).to(device)
 
 # Logs
 counter = 1
@@ -60,14 +60,11 @@ loss_log = np.zeros((manifold_noise.shape[0], function_noise.shape[0]))
 
 for count_m, noise_m in enumerate(manifold_noise):
     # Add noise to manifold
-    X_noisy = X_sampled + noise_m * \
-        torch.randn(X_sampled.shape[0], n)
+    X_noisy = X_sampled + noise_m * torch.randn(m, n).to(device)
+
     for count_f, noise_f in enumerate(function_noise):
-        print(
-            f"Iteration: {counter}/{manifold_noise.shape[0]*function_noise.shape[0]}, Manifold noise: {noise_m:0.3f}, Function noise: {noise_f:0.3f}")
         # Add noise to function
-        Y_noisy = Y_sampled + noise_f * \
-            torch.randn(m, 1)
+        Y_noisy = Y_sampled + noise_f * torch.randn(m, 1).to(device)
 
         # Training points
         X_train = X_noisy[idx_train, :]
@@ -80,12 +77,19 @@ for count_m, noise_m in enumerate(manifold_noise):
         # Precision matrix model
         k = 4
         nu = 2
-        model = MaternPrecision(X_noisy, k, nu)
+        if use_cuda:
+            model = MaternPrecision(X_sampled, k, nu).cuda()
+        else:
+            model = MaternPrecision(X_sampled, k, nu)
         model.train()  # Basically it clears the cache
 
         # Training
         training_iter = 1000
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-1)
+
+        # Print iteration
+        print(
+            f"Iteration: {counter}/{manifold_noise.shape[0]*function_noise.shape[0]}, Manifold noise: {noise_m:0.3f}, Function noise: {noise_f:0.3f}")
 
         with settings.fast_computations(log_prob=False) and settings.max_cholesky_size(300) and torch.autograd.set_detect_anomaly(True):
             for i in range(training_iter):
@@ -108,9 +112,6 @@ for count_m, noise_m in enumerate(manifold_noise):
                                       -model.to_operator().inv_quad_logdet(logdet=True)[1], Y_train.size(-1) * math.log(2 * math.pi)])
 
                 loss.backward()
-
-                # Print step information
-                # print(f"Iteration: {i}, Loss: {loss.item():0.3f}, eps: {model.eps.item():0.3f}, length: {model.length.item():0.3f}, signal: {model.signal.item():0.3f}, noise: {model.noise.item():0.3f}")
 
                 # Step
                 optimizer.step()

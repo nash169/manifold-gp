@@ -13,6 +13,7 @@ class MaternPrecision(gpytorch.Module):
     def __init__(self, X, k, nu=5, taylor=3, **kwargs):
         super().__init__(**kwargs)
 
+        # Fix shape in case of 1D vector
         if X.ndimension() == 1:
             self.X_ = X.unsqueeze(-1)
         else:
@@ -22,7 +23,12 @@ class MaternPrecision(gpytorch.Module):
         self.size_ = torch.Size([X.shape[0], X.shape[0]])
 
         # Create graph
-        self.knn_ = faiss.IndexFlatL2(X.shape[1])
+        if X.is_cuda:
+            res = faiss.StandardGpuResources()
+            self.knn_ = faiss.GpuIndexFlatL2(res, X.shape[1])
+        else:
+            self.knn_ = faiss.IndexFlatL2(X.shape[1])
+
         self.knn_.train(X)
         self.knn_.add(X)
         distances, neighbors = self.knn_.search(X, k+1)
@@ -140,7 +146,7 @@ class MaternPrecision(gpytorch.Module):
         val = val.div(deg.sqrt().unsqueeze(1)).div(
             deg.sqrt()[self.idx_[:, 1:]])
         val = torch.cat(
-            (torch.ones(self.X_.shape[0], 1) + 2*self.nu_/self.length**2, -val), dim=1)
+            (torch.ones(self.X_.shape[0], 1).to(x.device) + 2*self.nu_/self.length**2, -val), dim=1)
 
         def matmul(x): return torch.sum(
             val * x[self.idx_].permute(2, 0, 1), dim=2).t()
@@ -175,7 +181,7 @@ class MaternPrecision(gpytorch.Module):
         else:
             y = x
 
-            for iter in range(0, self.nu_):
+            for _ in range(0, self.nu_):
                 y = torch.sum(
                     val * y[self.idx_].permute(2, 0, 1), dim=2).t()
 
@@ -189,15 +195,11 @@ class MaternPrecision(gpytorch.Module):
         deg = val.sum(dim=1)
         val = val.div(deg.sqrt().unsqueeze(1)).div(
             deg.sqrt()[self.idx_[:, 1:]])
-        val = torch.cat((torch.ones(self.X_.shape[0], 1), -val), dim=1)
-        # val = self.val_.div(-self.eps**2).exp()
-        # deg = val.sum(dim=1)
-        # val = val.div(deg.unsqueeze(1)).div(deg[self.idx_[:, 1:]])
-        # val = torch.cat((torch.ones(
-        #     self.X_.shape[0], 1), -val.div(val.sum(dim=1).unsqueeze(1))), dim=1)*4/self.eps
+        val = torch.cat(
+            (torch.ones(self.X_.shape[0], 1).to(self.X_.device), -val), dim=1)
 
         rows = torch.arange(self.idx_.shape[0]).repeat_interleave(
-            self.idx_.shape[1]).unsqueeze(0)
+            self.idx_.shape[1]).unsqueeze(0).to(self.X_.device)
         cols = self.idx_.reshape(1, -1)
         val = val.reshape(1, -1).squeeze()
 

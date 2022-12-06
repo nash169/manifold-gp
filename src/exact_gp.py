@@ -3,6 +3,7 @@
 
 import gpytorch
 
+
 class ExactGP(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, kernel):
         super().__init__(train_x, train_y, likelihood)
