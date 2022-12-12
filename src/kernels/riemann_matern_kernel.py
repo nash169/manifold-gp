@@ -26,7 +26,7 @@ class RiemannMaternKernel(gpytorch.kernels.Kernel):
 
         # Heat kernel length parameter for Laplacian approximation
         self.register_parameter(
-            name='raw_epsilon', parameter=torch.nn.Parameter(torch.tensor(1.), requires_grad=False)
+            name='raw_epsilon', parameter=torch.nn.Parameter(torch.tensor(-2.), requires_grad=False)
         )
         self.register_constraint("raw_epsilon", Positive())
 
@@ -103,7 +103,7 @@ class RiemannMaternKernel(gpytorch.kernels.Kernel):
         val = val.div(deg.sqrt().unsqueeze(1)).div(
             deg.sqrt()[self.indices[:, 1:]])
 
-        # Laplacian matrix
+        # Base Precision matrix
         return torch.cat((torch.ones(self.nodes.shape[0], 1).to(self.nodes.device) + 2*self.nu/self.lengthscale**2, -val), dim=1)
 
     def eigenfunctions(self, x):
