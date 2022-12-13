@@ -4,8 +4,8 @@
 import numpy as np
 import torch
 import gpytorch
-from src.kernels.riemann_matern_kernel import RiemannMaternKernel
-from src.models.riemann_gp import RiemannGP
+from manifold_gp.kernels.riemann_matern_kernel import RiemannMaternKernel
+from manifold_gp.models.riemann_gp import RiemannGP
 
 # Set device
 use_cuda = torch.cuda.is_available()
@@ -49,6 +49,6 @@ model = RiemannGP(sampled_x, sampled_y, likelihood, kernel).to(device)
 
 # Train model
 lr = 1e-1
-iters = 2
+iters = 100
 verbose = True
 model.manifold_informed_train(lr, iters, verbose)

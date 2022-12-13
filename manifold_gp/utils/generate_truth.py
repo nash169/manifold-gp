@@ -1,17 +1,11 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-import numpy as np
-import torch
-import networkx as nx
-import os
-
-from mayavi import mlab
-
-
-# Build ground truth on the mesh
 def groundtruth_from_mesh(mesh_file):
+    import os
+    import numpy as np
     import trimesh
+    import networkx as nx
     # Load mesh
     if os.path.splitext(mesh_file)[1] == '.msh':
         mesh = trimesh.load_mesh(
@@ -47,6 +41,9 @@ def groundtruth_from_mesh(mesh_file):
 
 def groundtruth_from_samples(X):
     import faiss
+    import networkx as nx
+    import numpy as np
+
     index = faiss.IndexFlatL2(X.shape[1])
     index.train(X)
     index.add(X)
@@ -63,54 +60,3 @@ def groundtruth_from_samples(X):
     Y = np.zeros((X.shape[0]))
     for i in range(X.shape[0]):
         Y[i] = 0.5*np.sin(5e2 * geodesics.get(i)**2)
-
-    return Y
-
-
-def reduce_mesh(mesh_file):
-    import trimesh
-
-    mesh = trimesh.load_mesh(
-        trimesh.interfaces.gmsh.load_gmsh("rsc/dragon.msh"))
-
-    mesh = mesh.simplify_quadratic_decimation(10000)
-
-    mesh.export('rsc/dragon_red.msh')
-
-
-def load_mesh(mesh_file):
-    import trimesh
-    # Load mesh
-    if os.path.splitext(mesh_file)[1] == '.msh':
-        mesh = trimesh.load_mesh(trimesh.interfaces.gmsh.load_gmsh(mesh_file))
-    else:
-        mesh = trimesh.load(mesh_file)
-
-    return mesh.vertices, mesh.faces
-
-
-# Plot function on the mesh
-def plot_function(x, y, z, triangles, function):
-    mlab.figure()
-    mlab.triangular_mesh(x, y, z, triangles, scalars=function)
-    v_options = {'mode': 'sphere',
-                 'scale_factor': 1e-2, }
-    mlab.points3d(x[0], y[0], z[0], **v_options)
-
-
-# RBF kernel
-def squared_exp(x, y, sigma=1):
-    l = -.5 / sigma**2
-    xx = torch.einsum('ij,ij->i', x, x).unsqueeze(1)
-    yy = torch.einsum('ij,ij->i', y, y).unsqueeze(0)
-    k = -2 * torch.mm(x, y.T) + xx + yy
-    k *= l
-    return torch.exp(k)
-
-
-# Edge probabilities
-def edge_probability(x, y, t=1):
-    xx = torch.einsum('ij,ij->i', x, x).unsqueeze(1)
-    yy = torch.einsum('ij,ij->i', y, y).unsqueeze(0)
-    k = -2 * torch.mm(x, y.T) + xx + yy
-    return torch.exp(t*k)

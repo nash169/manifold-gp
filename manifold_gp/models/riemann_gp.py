@@ -5,8 +5,8 @@ import math
 import torch
 import gpytorch
 
-from src.utils.sparse_operator import SparseOperator
-from src.utils.function_operator import FunctionOperator
+from ..utils.sparse_operator import SparseOperator
+from ..utils.function_operator import FunctionOperator
 
 
 class RiemannGP(gpytorch.models.ExactGP):
@@ -27,7 +27,7 @@ class RiemannGP(gpytorch.models.ExactGP):
             torch.tensor(-5.0), requires_grad=True)
         if hasattr(self.covar_module, 'base_kernel'):
             self.covar_module.raw_outputscale = torch.nn.Parameter(
-                torch.tensor(-1.0), requires_grad=True)
+                torch.tensor(0.0), requires_grad=True)
             self.covar_module.base_kernel.raw_lengthscale = torch.nn.Parameter(
                 torch.tensor(-1.0), requires_grad=True)
         else:
@@ -73,7 +73,7 @@ class RiemannGP(gpytorch.models.ExactGP):
             z = Q_xx + z[self.labels, :]
 
             if hasattr(self.covar_module, 'outputscale'):
-                z /= self.covar_module.outputscale**2
+                z *= self.covar_module.outputscale.pow(-2)
 
             return z
         else:
@@ -84,7 +84,7 @@ class RiemannGP(gpytorch.models.ExactGP):
                     val * y[kernel.indices].permute(2, 0, 1), dim=2).t()
 
             if hasattr(self.covar_module, 'outputscale'):
-                y /= self.covar_module.outputscale**2
+                y *= self.covar_module.outputscale.pow(-2)
 
             return y
 
@@ -110,9 +110,6 @@ class RiemannGP(gpytorch.models.ExactGP):
         # Optimizer
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
-        # Noise Precision Matrix Operator
-        operator = FunctionOperator(y, self.noise_precision_matrix)
-
         for name, param in self.named_parameters():
             if param.requires_grad:
                 print(f"{name}: {param.item():0.3f} ", end='')
@@ -122,12 +119,14 @@ class RiemannGP(gpytorch.models.ExactGP):
                 # Zero gradients from previous iteration
                 optimizer.zero_grad()
 
-                output = self.noise_precision_matrix(y)
+                # Operator
                 opt = FunctionOperator(y, self.noise_precision_matrix)
 
-                loss = 0.5 * sum([torch.dot(y.squeeze(), output.squeeze()),
+                # Loss
+                loss = 0.5 * sum([torch.dot(y.squeeze(), opt.matmul(y).squeeze()),
                                   -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
 
+                # Gradient
                 loss.backward()
 
                 # Print step information
