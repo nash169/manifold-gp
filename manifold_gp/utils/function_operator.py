@@ -6,19 +6,15 @@ from linear_operator import LinearOperator
 from typing import Union
 
 
-class ModuleOperator(LinearOperator):
-    def __init__(self, X, module):
-        super(ModuleOperator, self).__init__(X, module=module)
-
-        self.X_ = X
-        self.module_ = module
+class FunctionOperator(LinearOperator):
+    def __init__(self, x, function):
+        super(FunctionOperator, self).__init__(x, function=function)
 
     def _matmul(self, x):
-        y = x
-        return self.module_(y)
+        return self._kwargs['function'](x)
 
     def _size(self):
-        return self.module_.size_
+        return torch.Size([self._args[0].shape[0], self._args[0].shape[0]])
 
     def _transpose_nonbatch(self):
         return self
