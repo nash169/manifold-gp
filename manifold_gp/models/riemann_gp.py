@@ -22,17 +22,35 @@ class RiemannGP(gpytorch.models.ExactGP):
         # Store labels in case of semi-supervised scenario
         self.labels = labels
 
-        # Preset parameters
-        self.likelihood.noise_covar.raw_noise = torch.nn.Parameter(
-            torch.tensor(-5.0), requires_grad=True)
+        # Preset noise variance
+        self.likelihood.noise = math.exp(-5.0)
+
+        # Preset signal variance (if present) and lengthscale
         if hasattr(self.covar_module, 'base_kernel'):
-            self.covar_module.raw_outputscale = torch.nn.Parameter(
-                torch.tensor(0.0), requires_grad=True)
-            self.covar_module.base_kernel.raw_lengthscale = torch.nn.Parameter(
-                torch.tensor(-1.0), requires_grad=True)
+            self.covar_module.outputscale = math.exp(0.0)
+            self.covar_module.base_kernel.lengthscale = math.exp(-1.0)
+            self.covar_module.base_kernel.epsilon = math.exp(-2.0)
         else:
-            self.covar_module.raw_lengthscale = torch.nn.Parameter(
-                torch.tensor(-1.0), requires_grad=True)
+            self.covar_module.lengthscale = math.exp(-1.0)
+            self.covar_module.epsilon = math.exp(-2.0)
+
+    # def train(self, mode=True):
+    #     super().train(mode)
+
+    #     # Build the Graph for the Laplacian approximation
+    #     if hasattr(self.covar_module, 'base_kernel'):
+    #         self.covar_module.base_kernel.generate_graph()
+    #     else:
+    #         self.covar_module.generate_graph()
+
+    def eval(self):
+        super().eval()
+
+        # Generate eigenfunctions for kernel evaluation
+        if hasattr(self.covar_module, 'base_kernel'):
+            self.covar_module.base_kernel.solve_laplacian()
+        else:
+            self.covar_module.solve_laplacian()
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -93,26 +111,23 @@ class RiemannGP(gpytorch.models.ExactGP):
 
     def manifold_informed_train(self, lr=1e-1, iter=100, verbose=True):
         # Training targets
-        y = self.train_targets
+        y = self.train_targets.unsqueeze(-1)
 
         # Deactivate optimization mean parameters
-        self.mean_module.raw_constant = torch.nn.Parameter(
-            self.mean_module.raw_constant.data, requires_grad=False)
+        self.mean_module.raw_constant.requires_grad = False
 
         # Activate optimization of the Laplacian lengthscale
         try:
-            self.covar_module.raw_epsilon = torch.nn.Parameter(
-                self.covar_module.raw_epsilon.data, requires_grad=True)
+            self.covar_module.raw_epsilon.requires_grad = True
         except:
-            self.covar_module.base_kernel.raw_epsilon = torch.nn.Parameter(
-                self.covar_module.base_kernel.raw_epsilon.data, requires_grad=True)
+            self.covar_module.base_kernel.raw_epsilon.requires_grad = True
 
         # Optimizer
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
-        for name, param in self.named_parameters():
-            if param.requires_grad:
-                print(f"{name}: {param.item():0.3f} ", end='')
+        # for name, param in self.named_parameters():
+        #     if param.requires_grad:
+        #         print(f"{name}: {param.item():0.3f} ", end='')
 
         with gpytorch.settings.fast_computations(log_prob=False) and gpytorch.settings.max_cholesky_size(300) and torch.autograd.set_detect_anomaly(True):
             for i in range(iter):
@@ -145,3 +160,12 @@ class RiemannGP(gpytorch.models.ExactGP):
 
                 # Step
                 optimizer.step()
+
+        # Activate optimization mean parameters
+        self.mean_module.raw_constant.requires_grad = True
+
+        # Deactivate optimization of the Laplacian lengthscale
+        try:
+            self.covar_module.raw_epsilon.requires_grad = False
+        except:
+            self.covar_module.base_kernel.raw_epsilon.requires_grad = False

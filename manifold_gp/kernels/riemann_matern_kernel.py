@@ -25,8 +25,9 @@ class RiemannMaternKernel(gpytorch.kernels.Kernel):
         self.modes = modes
 
         # Heat kernel length parameter for Laplacian approximation
+        # register the raw parameter
         self.register_parameter(
-            name='raw_epsilon', parameter=torch.nn.Parameter(torch.tensor(-2.), requires_grad=False)
+            name='raw_epsilon', parameter=torch.nn.Parameter(torch.zeros(*self.batch_shape, 1, 1).to(nodes.device), requires_grad=False)
         )
         self.register_constraint("raw_epsilon", Positive())
 
@@ -37,16 +38,11 @@ class RiemannMaternKernel(gpytorch.kernels.Kernel):
         else:
             self.knn = faiss.IndexFlatL2(self.nodes.shape[1])
 
-        # Build graph
-        self.knn.train(self.nodes)
-        self.knn.add(self.nodes)
-        dist, idx = self.knn.search(self.nodes, self.modes+1)
-        self.values = dist[:, 1:]
-        self.indices = idx
+        # Build graph (for the moment we leave the generation of the graph here. It could be moved before the training only)
+        self.generate_graph()
 
-        # Compute eigenvalues and eigenvectors
-        self.eigenvalues, self.eigenvectors = torch.lobpcg(
-            self.laplacian_matrix(), k=modes, largest=False)
+        # # Compute eigenvalues and eigenvectors (for the moment this happens in the evaluation of the model)
+        # self.solve_laplacian()
 
     @property
     def epsilon(self):
@@ -65,14 +61,22 @@ class RiemannMaternKernel(gpytorch.kernels.Kernel):
             raw_epsilon=self.raw_epsilon_constraint.inverse_transform(value))
 
     def forward(self, x1, x2, **params):
-        s = (2*self.nu / self.lengthscale**2 + self.eigenvalues).pow(-self.nu)
+        s = (2*self.nu / self.lengthscale.square() +
+             self.eigenvalues).pow(-self.nu)
         s /= s.sum()
 
-        return torch.mm(self.eigenfunctions(x1).T, s.unsqueeze(1)*self.eigenfunctions(x2))
+        return torch.mm(self.eigenfunctions(x1).T, s.T*self.eigenfunctions(x2))
+
+    def generate_graph(self):
+        self.knn.train(self.nodes)
+        self.knn.add(self.nodes)
+        dist, idx = self.knn.search(self.nodes, self.modes+1)
+        self.values = dist[:, 1:]
+        self.indices = idx
 
     def laplacian_matrix(self):
         # Similarity matrix
-        val = self.values.div(-0.5*self.epsilon**2).exp()
+        val = self.values.div(-0.5*self.epsilon.square()).exp()
 
         # Degree matrix
         deg = val.sum(dim=1)
@@ -92,9 +96,13 @@ class RiemannMaternKernel(gpytorch.kernels.Kernel):
 
         return torch.sparse_coo_tensor(torch.cat((rows, cols), dim=0), val, (self.indices.shape[0], self.indices.shape[0]))
 
+    def solve_laplacian(self):
+        self.eigenvalues, self.eigenvectors = torch.lobpcg(
+            self.laplacian_matrix(), k=self.modes, largest=False)
+
     def base_precision_matrix(self):
         # Similarity matrix
-        val = self.values.div(-0.5*self.epsilon**2).exp()
+        val = self.values.div(-0.5*self.epsilon.square()).exp()
 
         # Degree matrix
         deg = val.sum(dim=1)
@@ -104,9 +112,9 @@ class RiemannMaternKernel(gpytorch.kernels.Kernel):
             deg.sqrt()[self.indices[:, 1:]])
 
         # Base Precision matrix
-        return torch.cat((torch.ones(self.nodes.shape[0], 1).to(self.nodes.device) + 2*self.nu/self.lengthscale**2, -val), dim=1)
+        return torch.cat((torch.ones(self.nodes.shape[0], 1).to(self.nodes.device) + 2*self.nu/self.lengthscale.square(), -val), dim=1)
 
     def eigenfunctions(self, x):
-        distances, inidices = self.knn.search(x, self.neighbors)
+        distances, indices = self.knn.search(x, self.neighbors)
 
-        return torch.sum(self.eigenvectors[inidices].permute(2, 0, 1) * distances.div(-0.5*self.epsilon**2).exp(), dim=2)
+        return torch.sum(self.eigenvectors[indices].permute(2, 0, 1) * distances.div(-0.5*self.epsilon.square()).exp(), dim=2)
