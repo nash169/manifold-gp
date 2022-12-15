@@ -27,14 +27,14 @@ function_noise = 0.01
 noisy_y = sampled_y + function_noise * torch.randn(m).to(device)
 
 # Train dataset
-num_train = 100
-train_idx = torch.randint(m, (num_train,))
+num_train = 50
+train_idx = torch.randperm(m)[:num_train]
 train_x = noisy_x[train_idx, :]
 train_y = noisy_y[train_idx]
 
 # Test points
-num_test = 50
-test_idx = torch.randint(m, (num_test,))
+num_test = 10
+test_idx = torch.randperm(m)[:num_test]
 test_x = noisy_x[test_idx, :]
 test_y = noisy_y[test_idx]
 
