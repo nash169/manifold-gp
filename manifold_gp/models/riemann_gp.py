@@ -44,13 +44,13 @@ class RiemannGP(gpytorch.models.ExactGP):
     #         self.covar_module.generate_graph()
 
     def eval(self):
-        super().eval()
-
         # Generate eigenfunctions for kernel evaluation
         if hasattr(self.covar_module, 'base_kernel'):
             self.covar_module.base_kernel.solve_laplacian()
         else:
             self.covar_module.solve_laplacian()
+
+        return super().eval()
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -169,3 +169,5 @@ class RiemannGP(gpytorch.models.ExactGP):
             self.covar_module.raw_epsilon.requires_grad = False
         except:
             self.covar_module.base_kernel.raw_epsilon.requires_grad = False
+
+        return loss
