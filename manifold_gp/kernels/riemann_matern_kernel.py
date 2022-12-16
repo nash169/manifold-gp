@@ -60,14 +60,21 @@ class RiemannMaternKernel(gpytorch.kernels.Kernel):
         self.initialize(
             raw_epsilon=self.raw_epsilon_constraint.inverse_transform(value))
 
-    def forward(self, x1, x2, **params):
+    def forward(self, x1, x2, diag=False, **params):
         s = (2*self.nu / self.lengthscale.square() +
              self.eigenvalues).pow(-self.nu)
         s /= s.sum()
 
-        return torch.mm(self.eigenfunctions(x1).T, s.T*self.eigenfunctions(x2))
+        covar = torch.mm(self.eigenfunctions(
+            x1).T, s.T*self.eigenfunctions(x2))
+
+        if diag:
+            return covar.diag()  # temporary solution (make diagonal calculation more efficient)
+        else:
+            return covar
 
     def generate_graph(self):
+        self.knn.reset()
         self.knn.train(self.nodes)
         self.knn.add(self.nodes)
         dist, idx = self.knn.search(self.nodes, self.modes+1)
