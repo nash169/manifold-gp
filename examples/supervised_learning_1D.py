@@ -40,18 +40,28 @@ test_y = noisy_y[test_idx]
 
 # Initialize kernel
 nu = 2
-neighbors = 5
+neighbors = 50
 modes = 10
 kernel = gpytorch.kernels.ScaleKernel(
     RiemannMaternKernel(sampled_x, nu, neighbors, modes))
 
 # Initialize likelihood and model
-likelihood = gpytorch.likelihoods.GaussianLikelihood()
+likelihood = gpytorch.likelihoods.GaussianLikelihood(
+    noise_constraint=gpytorch.constraints.GreaterThan(1e-8))
 model = RiemannGP(sampled_x, sampled_y, likelihood, kernel).to(device)
+
+# Model Hyperparameters
+hypers = {
+    'likelihood.noise_covar.noise': 1e-5,
+    'covar_module.base_kernel.epsilon': 0.1269,
+    'covar_module.base_kernel.lengthscale': 0.3133,
+    'covar_module.outputscale': 0.7133,
+}
+model.initialize(**hypers)
 
 # Train model
 lr = 1e-1
-iters = 50
+iters = 10
 verbose = True
 model.manifold_informed_train(lr, iters, verbose)
 

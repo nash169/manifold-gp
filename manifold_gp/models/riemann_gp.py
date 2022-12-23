@@ -22,17 +22,17 @@ class RiemannGP(gpytorch.models.ExactGP):
         # Store labels in case of semi-supervised scenario
         self.labels = labels
 
-        # Preset noise variance
-        self.likelihood.noise = math.exp(-5.0)
+        # # Preset noise variance
+        # self.likelihood.noise = math.exp(-5.0)
 
-        # Preset signal variance (if present) and lengthscale
-        if hasattr(self.covar_module, 'base_kernel'):
-            self.covar_module.outputscale = math.exp(0.0)
-            self.covar_module.base_kernel.lengthscale = math.exp(-1.0)
-            self.covar_module.base_kernel.epsilon = math.exp(-2.0)
-        else:
-            self.covar_module.lengthscale = math.exp(-1.0)
-            self.covar_module.epsilon = math.exp(-2.0)
+        # # Preset signal variance (if present) and lengthscale
+        # if hasattr(self.covar_module, 'base_kernel'):
+        #     self.covar_module.outputscale = math.exp(0.0)
+        #     self.covar_module.base_kernel.lengthscale = math.exp(-1.0)
+        #     self.covar_module.base_kernel.epsilon = math.exp(-2.0)
+        # else:
+        #     self.covar_module.lengthscale = math.exp(-1.0)
+        #     self.covar_module.epsilon = math.exp(-2.0)
 
     # def train(self, mode=True):
     #     super().train(mode)
@@ -91,7 +91,7 @@ class RiemannGP(gpytorch.models.ExactGP):
             z = Q_xx + z[self.labels, :]
 
             if hasattr(self.covar_module, 'outputscale'):
-                z *= self.covar_module.outputscale.pow(-2)
+                z /= self.covar_module.outputscale
 
             return z
         else:
@@ -102,12 +102,12 @@ class RiemannGP(gpytorch.models.ExactGP):
                     val * y[kernel.indices].permute(2, 0, 1), dim=2).t()
 
             if hasattr(self.covar_module, 'outputscale'):
-                y *= self.covar_module.outputscale.pow(-2)
+                y /= self.covar_module.outputscale
 
             return y
 
     def noise_precision_matrix(self, x):
-        return self.noiseless_precision_matrix(x - self.likelihood.noise.pow(2)*self.noiseless_precision_matrix(x + self.likelihood.noise.pow(4)*self.noiseless_precision_matrix(x)))
+        return self.noiseless_precision_matrix(x - self.likelihood.noise*self.noiseless_precision_matrix(x + self.likelihood.noise*self.noiseless_precision_matrix(x)))
 
     def manifold_informed_train(self, lr=1e-1, iter=100, verbose=True):
         # Training targets
@@ -135,7 +135,8 @@ class RiemannGP(gpytorch.models.ExactGP):
                 optimizer.zero_grad()
 
                 # Operator
-                opt = FunctionOperator(y, self.noise_precision_matrix)
+                opt = FunctionOperator(
+                    y, self.noise_precision_matrix).requires_grad_(True)
 
                 # Loss
                 loss = 0.5 * sum([torch.dot(y.squeeze(), opt.matmul(y).squeeze()),
@@ -147,10 +148,10 @@ class RiemannGP(gpytorch.models.ExactGP):
                 # Print step information
                 if verbose:
                     print(
-                        f"Iteration: {i}, Loss: {loss.item():0.3f}, Noise Variance: {self.likelihood.noise.item():0.3f}", end='')
+                        f"Iteration: {i}, Loss: {loss.item():0.3f}, Noise Variance: {self.likelihood.noise.sqrt().item():0.3f}", end='')
                     if hasattr(self.covar_module, 'outputscale'):
                         print(
-                            f", Signal Variance: {self.covar_module.outputscale.item():0.3f}", end='')
+                            f", Signal Variance: {self.covar_module.outputscale.sqrt().item():0.3f}", end='')
                     if hasattr(self.covar_module, 'base_kernel'):
                         print(
                             f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}, Epsilon: {self.covar_module.base_kernel.epsilon.item():0.3f}")
