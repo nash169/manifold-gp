@@ -42,7 +42,7 @@ mse = torch.zeros_like(manifold_noise)
 
 # Create Kernel
 nu = 2
-neighbors = 5
+neighbors = 50
 modes = 10
 kernel = gpytorch.kernels.ScaleKernel(
     RiemannMaternKernel(sampled_x, nu, neighbors, modes))
