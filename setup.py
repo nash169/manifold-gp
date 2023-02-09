@@ -38,6 +38,6 @@ setup(
         ]
     },
     package_data={
-        "manifold_gp.data": ["*.msh", "*.stl"],
+        "manifold_gp.data": ["*.msh", "*.stl", "*.csv"],
     }
 )
