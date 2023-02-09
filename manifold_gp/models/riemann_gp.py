@@ -123,7 +123,8 @@ class RiemannGP(gpytorch.models.ExactGP):
             self.covar_module.base_kernel.raw_epsilon.requires_grad = True
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(
+            self.parameters(), lr=lr, weight_decay=1e-8)
 
         # for name, param in self.named_parameters():
         #     if param.requires_grad:
@@ -170,5 +171,53 @@ class RiemannGP(gpytorch.models.ExactGP):
             self.covar_module.raw_epsilon.requires_grad = False
         except:
             self.covar_module.base_kernel.raw_epsilon.requires_grad = False
+
+        return loss
+
+    def vanilla_train(self, lr=1e-1, iter=100, verbose=True):
+        # Extract eigenvalues and eigenvectors
+        if hasattr(self.covar_module, 'base_kernel'):
+            self.covar_module.base_kernel.solve_laplacian()
+        else:
+            self.covar_module.solve_laplacian()
+
+        # Train model
+        self.train()
+        self.likelihood.train()
+
+        # Optimizer
+        optimizer = torch.optim.Adam(
+            self.parameters(), lr=lr, weight_decay=1e-8)
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+
+        for i in range(iter):
+            # Zero gradients from previous iteration
+            optimizer.zero_grad()
+
+            # Model output
+            output = self.forward(self.train_inputs[0])
+
+            # Loss
+            loss = -mll(output, self.train_targets)
+
+            # Gradient
+            loss.backward()
+
+            # Print step information
+            if verbose:
+                print(
+                    f"Iteration: {i}, Loss: {loss.item():0.3f}, Noise Variance: {self.likelihood.noise.sqrt().item():0.3f}", end='')
+                if hasattr(self.covar_module, 'outputscale'):
+                    print(
+                        f", Signal Variance: {self.covar_module.outputscale.sqrt().item():0.3f}", end='')
+                if hasattr(self.covar_module, 'base_kernel'):
+                    print(
+                        f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}, Epsilon: {self.covar_module.base_kernel.epsilon.item():0.3f}")
+                else:
+                    print(
+                        f", Lengthscale: {self.covar_module.lengthscale.item():0.3f}, Epsilon: {self.covar_module.epsilon.item():0.3f}")
+
+            # Step
+            optimizer.step()
 
         return loss
