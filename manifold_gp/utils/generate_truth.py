@@ -6,10 +6,11 @@ def groundtruth_from_mesh(mesh_file):
     import numpy as np
     import trimesh
     import networkx as nx
+
     # Load mesh
     if os.path.splitext(mesh_file)[1] == '.msh':
         mesh = trimesh.load_mesh(
-            trimesh.interfaces.gmsh.load_gmsh(mesh_file))
+            trimesh.interfaces.gmsh.load_gmsh(str(mesh_file)))
     else:
         mesh = trimesh.load(mesh_file)
 
