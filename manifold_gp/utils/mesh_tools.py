@@ -5,7 +5,7 @@ def reduce_mesh(mesh_file):
     import trimesh
 
     mesh = trimesh.load_mesh(
-        trimesh.interfaces.gmsh.load_gmsh("rsc/dragon.msh"))
+        trimesh.interfaces.gmsh.load_gmsh(mesh_file))
 
     mesh = mesh.simplify_quadratic_decimation(10000)
 

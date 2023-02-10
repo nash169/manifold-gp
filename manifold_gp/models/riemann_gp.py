@@ -5,8 +5,8 @@ import math
 import torch
 import gpytorch
 
-from ..utils.sparse_operator import SparseOperator
-from ..utils.function_operator import FunctionOperator
+from linear_operator import LinearOperator
+from typing import Union
 
 
 class RiemannGP(gpytorch.models.ExactGP):
@@ -22,26 +22,10 @@ class RiemannGP(gpytorch.models.ExactGP):
         # Store labels in case of semi-supervised scenario
         self.labels = labels
 
-        # # Preset noise variance
-        # self.likelihood.noise = math.exp(-5.0)
-
-        # # Preset signal variance (if present) and lengthscale
-        # if hasattr(self.covar_module, 'base_kernel'):
-        #     self.covar_module.outputscale = math.exp(0.0)
-        #     self.covar_module.base_kernel.lengthscale = math.exp(-1.0)
-        #     self.covar_module.base_kernel.epsilon = math.exp(-2.0)
-        # else:
-        #     self.covar_module.lengthscale = math.exp(-1.0)
-        #     self.covar_module.epsilon = math.exp(-2.0)
-
-    # def train(self, mode=True):
-    #     super().train(mode)
-
-    #     # Build the Graph for the Laplacian approximation
-    #     if hasattr(self.covar_module, 'base_kernel'):
-    #         self.covar_module.base_kernel.generate_graph()
-    #     else:
-    #         self.covar_module.generate_graph()
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
     def eval(self):
         # Generate eigenfunctions for kernel evaluation
@@ -52,62 +36,37 @@ class RiemannGP(gpytorch.models.ExactGP):
 
         return super().eval()
 
-    def forward(self, x):
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
-        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-
-    def noiseless_precision_matrix(self, x):
+    def noiseless_precision(self, x):
         kernel = self.covar_module.base_kernel if hasattr(
             self.covar_module, 'base_kernel') else self.covar_module
 
-        # Base Precision Matrix
-        val = kernel.base_precision_matrix()
-
-        if self.labels is not None:
+        if self.labels is None:
+            z = x
+            z = kernel.precision().matmul(z)
+        else:
             y = torch.zeros(kernel.nodes.shape[0], x.shape[1]).to(x.device)
             y[self.labels, :] = x
-
-            for _ in range(kernel.nu):
-                y = torch.sum(
-                    val * y[kernel.indices].permute(2, 0, 1), dim=2).t()
+            y = kernel.precision().matmul(y)
 
             Q_xx = y[self.labels, :]
-            opt = SparseOperator(val, kernel.indices, torch.Size(
-                [kernel.nodes.shape[0], kernel.nodes.shape[0]]))
-            y[self.labels, :] = 0.0
 
-            for _ in range(kernel.nu):
-                y = opt.solve(y)
+            y[self.labels, :] = 0.0
+            y = kernel.precision().solve(y)
 
             not_labaled = torch.ones_like(y)
             not_labaled[self.labels, :] = 0.0
             z = y*not_labaled
-
-            for _ in range(kernel.nu):
-                z = torch.sum(
-                    val * z[kernel.indices].permute(2, 0, 1), dim=2).t()
+            z = kernel.precision().matmul(z)
 
             z = Q_xx + z[self.labels, :]
 
-            if hasattr(self.covar_module, 'outputscale'):
-                z /= self.covar_module.outputscale
+        if hasattr(self.covar_module, 'outputscale'):
+            z /= self.covar_module.outputscale
 
-            return z
-        else:
-            y = x
+        return z
 
-            for _ in range(kernel.nu):
-                y = torch.sum(
-                    val * y[kernel.indices].permute(2, 0, 1), dim=2).t()
-
-            if hasattr(self.covar_module, 'outputscale'):
-                y /= self.covar_module.outputscale
-
-            return y
-
-    def noise_precision_matrix(self, x):
-        return self.noiseless_precision_matrix(x - self.likelihood.noise*self.noiseless_precision_matrix(x + self.likelihood.noise*self.noiseless_precision_matrix(x)))
+    def noise_precision(self, x):
+        return self.noiseless_precision(x - self.likelihood.noise*self.noiseless_precision(x + self.likelihood.noise*self.noiseless_precision(x)))
 
     def manifold_informed_train(self, lr=1e-1, iter=100, verbose=True):
         # Training targets
@@ -126,10 +85,6 @@ class RiemannGP(gpytorch.models.ExactGP):
         optimizer = torch.optim.Adam(
             self.parameters(), lr=lr, weight_decay=1e-8)
 
-        # for name, param in self.named_parameters():
-        #     if param.requires_grad:
-        #         print(f"{name}: {param.item():0.3f} ", end='')
-
         with gpytorch.settings.fast_computations(log_prob=False) and gpytorch.settings.max_cholesky_size(300) and torch.autograd.set_detect_anomaly(True):
             for i in range(iter):
                 # Zero gradients from previous iteration
@@ -137,7 +92,7 @@ class RiemannGP(gpytorch.models.ExactGP):
 
                 # Operator
                 opt = FunctionOperator(
-                    y, self.noise_precision_matrix).requires_grad_(True)
+                    y, self.noise_precision).requires_grad_(True)
 
                 # Loss
                 loss = 0.5 * sum([torch.dot(y.squeeze(), opt.matmul(y).squeeze()),
@@ -221,3 +176,23 @@ class RiemannGP(gpytorch.models.ExactGP):
             optimizer.step()
 
         return loss
+
+
+class FunctionOperator(LinearOperator):
+    def __init__(self, x, function):
+        super(FunctionOperator, self).__init__(x, function=function)
+
+    def _matmul(self, x):
+        return self._kwargs['function'](x)
+
+    def _size(self):
+        return torch.Size([self._args[0].shape[0], self._args[0].shape[0]])
+
+    def _transpose_nonbatch(self):
+        return self
+
+    def evaluate_kernel(self):
+        return self
+
+    def matmul(self, other: Union[torch.Tensor, "LinearOperator"]) -> Union[torch.Tensor, "LinearOperator"]:
+        return self._matmul(other)

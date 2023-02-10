@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
+
 from time import time
 
 from abc import abstractmethod
 from typing import Optional
 
 import torch
+import numpy as np
 
 import faiss
 import faiss.contrib.torch_utils
@@ -14,11 +16,16 @@ import faiss.contrib.torch_utils
 import gpytorch
 from gpytorch.constraints import Positive
 
+from torch_geometric.utils import coalesce, scatter
+
+from typing import Optional, Union, Callable
+from linear_operator import LinearOperator, settings, utils
+
 
 class RiemannKernel(gpytorch.kernels.Kernel):
     has_lengthscale = True
 
-    def __init__(self, nodes: torch.Tensor, neighbors: Optional[int] = 2, modes: Optional[int] = 10, alpha: Optional[float] = 1.0, laplacian: Optional[str] = "normalized", **kwargs):
+    def __init__(self, nodes: torch.Tensor, neighbors: Optional[int] = 2, modes: Optional[int] = 10, **kwargs):
         super(RiemannKernel, self).__init__(**kwargs)
 
         # Hyperparameter
@@ -42,14 +49,8 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         else:
             self.knn = faiss.IndexFlatL2(self.nodes.shape[1])
 
-        # Build graph (for the moment we leave the generation of the graph here. It could be moved before the training only)
+        # Build graph
         self.generate_graph()
-
-        # Store Laplacian parameters
-        self.alpha = alpha
-        self.ltype = laplacian
-        # The eigen decomposition of the Laplacian is not performed here but when the model is evaluated. If you want to evaluate
-        # the kernel call solve_laplacian method.
 
     @abstractmethod
     def spectral_density(self):
@@ -66,7 +67,6 @@ class RiemannKernel(gpytorch.kernels.Kernel):
 
     @property
     def epsilon(self):
-        # when accessing the parameter, apply the constraint transform
         return self.raw_epsilon_constraint.transform(self.raw_epsilon)
 
     @epsilon.setter
@@ -76,90 +76,79 @@ class RiemannKernel(gpytorch.kernels.Kernel):
     def _set_epsilon(self, value):
         if not torch.is_tensor(value):
             value = torch.as_tensor(value).to(self.raw_epsilon)
-        # when setting the paramater, transform the actual value to a raw one by applying the inverse transform
         self.initialize(
             raw_epsilon=self.raw_epsilon_constraint.inverse_transform(value))
 
     def generate_graph(self):
+        # KNN Search
         self.knn.reset()
         self.knn.train(self.nodes)
         self.knn.add(self.nodes)
-        dist, idx = self.knn.search(self.nodes, self.neighbors+1)
-        self.values = dist[:, 1:]
-        self.indices = idx
+        val, idx = self.knn.search(self.nodes, self.neighbors+1)
 
-    # def laplacian_matrix(self):
-    #     # Similarity matrix
-    #     val = self.values.div(-2*self.epsilon.square()).exp()
+        # Symmetric KNN
+        rows = torch.arange(idx.shape[0]).repeat_interleave(
+            idx.shape[1]-1).to(self.nodes.device)
+        cols = idx[:, 1:].reshape(1, -1).squeeze()
+        val = val[:, 1:].reshape(1, -1).squeeze()
+        split = cols > rows
+        rows, cols = torch.cat([rows[split], cols[~split]], dim=0), torch.cat(
+            [cols[split], rows[~split]], dim=0)
+        idx = torch.stack([rows, cols], dim=0)
+        val = torch.cat([val[split], val[~split]])
+        self.indices, self.values = coalesce(idx, val, reduce='mean')
 
-    #     # Degree matrix
-    #     deg = val.sum(dim=1)
+    def laplacian(self, operator=False):
+        # Diffusion Maps Normalization
+        val = self.values.div(-2*self.epsilon.square()).exp().squeeze()
+        deg = torch.zeros(self.nodes.shape[0]).to(self.nodes.device).scatter_add_(
+            0, self.indices[0, :], val).scatter_add_(0, self.indices[1, :], val)
+        val = val.div(deg[self.indices[0, :]]*deg[self.indices[1, :]])
 
-    #     # Symmetric normalization
-    #     val = val.div(deg.sqrt().unsqueeze(1)).div(
-    #         deg.sqrt()[self.indices[:, 1:]])
+        # Symmetric Laplacian Normalization
+        deg = torch.zeros(self.nodes.shape[0]).to(self.nodes.device).scatter_add_(
+            0, self.indices[0, :], val).scatter_add(0, self.indices[1, :], val).sqrt()
+        val.div_(deg[self.indices[0, :]]*deg[self.indices[1, :]])
 
-    #     # Laplacian matrix
-    #     val = torch.cat(
-    #         (torch.ones(self.nodes.shape[0], 1).to(self.nodes.device), -val), dim=1)
-
-    #     rows = torch.arange(self.indices.shape[0]).repeat_interleave(
-    #         self.indices.shape[1]).unsqueeze(0).to(self.nodes.device)
-    #     cols = self.indices.reshape(1, -1)
-    #     val = val.reshape(1, -1).squeeze()
-
-    #     return torch.sparse_coo_tensor(torch.cat((rows, cols), dim=0), val, (self.indices.shape[0], self.indices.shape[0]))
-
-    # It follows: https://www.jmlr.org/papers/volume8/hein07a/hein07a.pdf
-
-    def laplacian(self, alpha=1, type="normalized"):
-        # Re-normalized kernel from Diffusion
-        val = self.values.div(-2*self.epsilon.square()).exp()
-        deg = val.sum(dim=1).pow(alpha)
-        val = val.div(deg.unsqueeze(1)).div(deg[self.indices[:, 1:]])
-
-        # Select the normalization type
-        if type == "randomwalk":
-            val = torch.cat((torch.ones(self.nodes.shape[0], 1).to(
-                self.nodes.device), -val.div(val.sum(dim=1).unsqueeze(1))), dim=1)
-        elif type == "unnormalized":
-            val = torch.cat((torch.ones(self.nodes.shape[0], 1).to(
-                self.nodes.device), -val), dim=1)
-        elif type == "normalized":
-            deg = val.sum(dim=1).sqrt()
-            val = torch.cat((torch.ones(self.nodes.shape[0], 1).to(
-                self.nodes.device), -val.div(deg.unsqueeze(1)).div(deg[self.indices[:, 1:]])), dim=1)
-
-        return val
-
-    def to_sparse(self, val):
-        rows = torch.arange(self.indices.shape[0]).repeat_interleave(
-            self.indices.shape[1]).unsqueeze(0).to(self.nodes.device)
-        cols = self.indices.reshape(1, -1)
-        val = val.reshape(1, -1).squeeze()
-
-        return torch.sparse_coo_tensor(torch.cat((rows, cols), dim=0), val, (self.indices.shape[0], self.indices.shape[0]))
+        if operator:
+            return LaplacianOperator(val, self)
+        else:
+            return val
 
     def solve_laplacian(self):
-        from scipy.sparse import coo_matrix
-        from scipy.sparse.linalg import eigs
-        # L = self.laplacian_matrix()
-        L = self.to_sparse(self.laplacian(alpha=1, type="normalized"))
-        indices = L.coalesce().indices().cpu().detach().numpy()
-        values = L.coalesce().values().cpu().detach().numpy()
-        Ls = coo_matrix(
-            (values, (indices[0, :], indices[1, :])), shape=L.shape)
-        T, V = eigs(Ls, k=self.modes, which='SR')
-        self.eigenvalues = torch.from_numpy(T).float().to(self.nodes.device)
-        # self.eigenvectors = np.sqrt(
-        #     self.nodes.shape[0])*torch.from_numpy(V).float().to(self.nodes.device).div(deg.unsqueeze(-1))
-        self.eigenvectors = torch.from_numpy(V).float().to(self.nodes.device)
+        # Lanczos
+        # t0 = time()
+        with gpytorch.settings.max_root_decomposition_size(self.modes):
+            self.eigenvalues, self.eigenvectors = self.laplacian(
+                operator=True).diagonalization(method="lanczos")
+        # t1 = time()
+        # print("Model 1: %.4g sec" % (t1 - t0))
 
+        # # Torch Sparse
+        # t0 = time()
+        # val = -self.laplacian()
+        # val = torch.cat(
+        #     (val.repeat(2), torch.ones(self.nodes.shape[0]).to(self.nodes.device)), dim=0)
+        # idx = torch.cat((self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0), torch.arange(
+        #     self.nodes.shape[0]).repeat(2, 1).to(self.nodes.device)), dim=1)
+        # L = torch.sparse_coo_tensor(
+        #     idx, val, (self.nodes.shape[0], self.nodes.shape[0]))
         # self.eigenvalues, self.eigenvectors = torch.lobpcg(
-        #     self.laplacian_matrix(), k=self.modes, largest=False)
+        #     L, k=self.modes, largest=False)
+        # t1 = time()
+        # print("Model 1: %.4g sec" % (t1 - t0))
 
-        # self.eigenvalues, self.eigenvectors = torch.lobpcg(self.to_sparse(
-        #     self.laplacian(alpha=self.alpha, type=self.ltype)), k=self.modes, largest=False, tol=1e-4, niter=-1)
+        # # Scipy Sparse
+        # t0 = time()
+        # from scipy.sparse import coo_matrix
+        # from scipy.sparse.linalg import eigs, eigsh
+        # L = coo_matrix(
+        #     (val.detach().cpu().numpy(), (idx[0, :].cpu().numpy(), idx[1, :].cpu().numpy())), shape=(self.nodes.shape[0], self.nodes.shape[0]))
+        # T, V = eigsh(L, k=self.modes, which='SM')
+        # self.eigenvalues = torch.from_numpy(T).float().to(self.nodes.device)
+        # self.eigenvectors = torch.from_numpy(V).float().to(self.nodes.device)
+        # t1 = time()
+        # print("Model 1: %.4g sec" % (t1 - t0))
 
     def eigenfunctions(self, x):
         distances, indices = self.knn.search(
@@ -174,3 +163,29 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         u[:, ~idx_zero] = torch.sum(
             y[:, ~idx_zero, :] / d[~idx_zero, :], dim=2).div(torch.sum(d[~idx_zero, :].pow(-1), dim=1))
         return u
+
+
+class LaplacianOperator(LinearOperator):
+    def __init__(self, laplacian, kernel):
+        super(LaplacianOperator, self).__init__(
+            laplacian, kernel=kernel)
+
+    def _matmul(self, x):
+        r = self._kwargs['kernel'].indices[0, :]
+        c = self._kwargs['kernel'].indices[1, :]
+        v = self._args[0]
+
+        return x.index_add(0, r, v.view(-1, 1) * x[c], alpha=-1).index_add(0, c, v.view(-1, 1)*x[r], alpha=-1)
+
+    def _size(self):
+        dim = self._kwargs['kernel'].nodes.shape[0]
+        return torch.Size([dim, dim])
+
+    def _transpose_nonbatch(self):
+        return self
+
+    def evaluate_kernel(self):
+        return self
+
+    def matmul(self, other: Union[torch.Tensor, "LinearOperator"]) -> Union[torch.Tensor, "LinearOperator"]:
+        return self._matmul(other)
