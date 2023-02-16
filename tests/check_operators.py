@@ -1,6 +1,8 @@
 # !/usr/bin/env python
 # encoding: utf-8
 
+from manifold_gp.kernels.riemann_kernel import LaplacianSymmetric, LaplacianRandomWalk
+from manifold_gp.kernels.riemann_matern_kernel import PrecisionMaternOperator2, PrecisionMaternOperator3
 import numpy as np
 import torch
 import gpytorch
@@ -32,14 +34,14 @@ knn = faiss.IndexFlatL2(nodes.shape[1])
 # Initialize kernel
 neighbors = 5
 modes = 5
-nu = 1
+nu = 2
 kernel = gpytorch.kernels.ScaleKernel(RiemannMaternKernel(
     nu=nu, nodes=nodes, neighbors=neighbors, modes=modes))
 likelihood = gpytorch.likelihoods.GaussianLikelihood(
     noise_constraint=gpytorch.constraints.GreaterThan(1e-8))
 model = RiemannGP(nodes, truth, likelihood, kernel)
 
-neighbors = 5
+kernel.base_kernel.epsilon = 0.5
 epsilon = kernel.base_kernel.epsilon  # torch.tensor([[0.05]])
 lengthscale = kernel.base_kernel.lengthscale
 outputscale = kernel.outputscale
@@ -51,7 +53,7 @@ val = val[:, 1:]
 idx = idx[:, 1:]
 
 
-def vanilla(idx, val):
+def symmetric(idx, val):
     dim = idx.shape[0]
     rows = torch.arange(idx.shape[0]).repeat_interleave(idx.shape[1])
     cols = idx.reshape(1, -1).squeeze()
@@ -79,6 +81,36 @@ def vanilla(idx, val):
     # L *= D.unsqueeze(-1)
 
     return torch.eye(dim)-L
+
+
+def randomwalk(idx, val):
+    dim = idx.shape[0]
+    rows = torch.arange(idx.shape[0]).repeat_interleave(idx.shape[1])
+    cols = idx.reshape(1, -1).squeeze()
+    val = val.reshape(1, -1).squeeze()
+
+    split = cols > rows
+    rows, cols = torch.cat([rows[split], cols[~split]], dim=0), torch.cat(
+        [cols[split], rows[~split]], dim=0)
+    idx = torch.stack([rows, cols], dim=0)
+    val = torch.cat([val[split], val[~split]])
+    idx, val = coalesce(idx, val, reduce='mean')
+    rows = idx[0, :]
+    cols = idx[1, :]
+
+    val = val.div(-2*epsilon.square()).exp().squeeze()
+
+    Lsparse = torch.sparse_coo_tensor(idx, val, (dim, dim))
+    L = (Lsparse.to_dense() + Lsparse.to_dense().t())
+    D = L.sum(dim=1).pow(-1).diag()
+    L = torch.mm(D, torch.mm(L, D))
+
+    D = L.sum(dim=1)  # .pow(-1).diag()
+    L = torch.linalg.solve(D.diag(), L)  # torch.mm(D.pow(-1).diag(), L)
+    # L = torch.mm(D, L)
+    # L *= D.unsqueeze(-1)
+
+    return torch.eye(dim)-L, D
 
 
 def sparse(idx, val):
@@ -132,21 +164,47 @@ def print_mat(mat):
     print('\n'.join(table))
 
 
-M = vanilla(idx, val) + \
+Ms = symmetric(idx, val) + \
     torch.eye(nodes.shape[0])*2*nu/lengthscale.square().squeeze()
-v, d, r, c = sparse(idx, val)
+Mr, D = randomwalk(idx, val)
+# Mr = torch.mm(Mr +
+#               torch.eye(nodes.shape[0])*2*nu/lengthscale.square().squeeze(), D.pow(-1).diag())
+Mr = Mr + torch.eye(nodes.shape[0])*2*nu/lengthscale.square().squeeze()
+
+
+# ls, f = torch.linalg.eig(Ms)
+# ls = torch.real(ls)
+# f = torch.real(f)
+# lr, g = torch.linalg.eig(Mr)
+# lr = torch.real(lr)
+# g = torch.real(g)
+
+# # + \
+# #     torch.eye(nodes.shape[0])*2*nu/lengthscale.square().squeeze()
+# v, d, r, c = sparse(idx, val)
 # v = sparse(idx, val)
 
+torch.manual_seed(1337)
 y = torch.rand(nodes.shape[0])
-mv = torch.mv(M, y)
+# mv = torch.mv(torch.mm(torch.mm(Ms, Ms), Ms), y)
+mv = torch.linalg.solve(Ms, torch.linalg.solve(Ms, y))
+# mv2 = torch.mv(torch.mm(torch.mm(Mr, Mr), Mr), torch.linalg.solve(D.diag(), y))
+# mv2 = torch.linalg.solve(torch.mm(D.diag(), torch.mm(torch.mm(Mr, Mr), Mr)), y)
+# mv2 = torch.mv(Mr, torch.linalg.solve(D.diag(), y))
+# mv2 = torch.mv(torch.mm(torch.mm(Mr, Mr), Mr), y)
 # mv2 = y - (torch.zeros(10).scatter_add_(
 #     0, r, v*y[c]) + torch.zeros(10).scatter_add_(0, c, v*y[r]))
 
 # mv2 = y.scatter_add(0, r, -v*y[c]).scatter_add(0, c, -v*y[r])
 
-# mv2 = torch.mv(L.t(), y)
-z = torch.rand(nodes.shape[0], 3)
-mv3 = torch.zeros(z.shape).scatter_add_(
-    0, r.unsqueeze(-1).repeat(1, 3), z[c]*v.unsqueeze(-1))
+# # mv2 = torch.mv(L.t(), y)
+# z = torch.rand(nodes.shape[0], 3)
+# mv3 = torch.zeros(z.shape).scatter_add_(
+#     0, r.unsqueeze(-1).repeat(1, 3), z[c]*v.unsqueeze(-1))
 
-# opt = kernel.precision()
+# opt = kernel.base_kernel.laplacian(operator=True)
+
+opt = kernel.base_kernel.precision()
+
+opt2 = PrecisionMaternOperator2(kernel.base_kernel.values, kernel.base_kernel)
+opt3 = PrecisionMaternOperator3(kernel.base_kernel.values, kernel.base_kernel)
