@@ -3,7 +3,7 @@
 
 import torch
 
-from .riemann_kernel import RiemannKernel
+from .riemann_kernel import RiemannKernel, LaplacianSymmetric, LaplacianRandomWalk
 
 from typing import Optional, Union, Callable
 from linear_operator import LinearOperator, settings, utils
@@ -22,7 +22,9 @@ class RiemannMaternKernel(RiemannKernel):
         return s / s.sum()
 
     def precision(self):
-        return PrecisionMaternOperator(self.laplacian(), kernel=self)
+        # return PrecisionMaternOperator2(self.values, kernel=self)
+        # return PrecisionMaternOperator(self.laplacian(), kernel=self)
+        return PrecisionMaternOperator3(self.values, kernel=self)
 
 
 class PrecisionMaternOperator(LinearOperator):
@@ -70,6 +72,104 @@ class PrecisionMaternOperator(LinearOperator):
                 x = super().solve(x, None)
 
         return x
+
+    def _size(self):
+        dim = self._kwargs['kernel'].nodes.shape[0]
+        return torch.Size([dim, dim])
+
+    def _transpose_nonbatch(self):
+        return self
+
+    def evaluate_kernel(self):
+        return self
+
+    def matmul(self, other: Union[torch.Tensor, "LinearOperator"]) -> Union[torch.Tensor, "LinearOperator"]:
+        return self._matmul(other)
+
+
+class PrecisionMaternOperator2(LinearOperator):
+    def __init__(self, values, kernel):
+        super(PrecisionMaternOperator2, self).__init__(values, kernel=kernel)
+
+        self.laplacian = LaplacianSymmetric(values, kernel)
+
+    def _base(self, x):
+        return 2*self._kwargs['kernel'].nu / self._kwargs['kernel'].lengthscale.square().squeeze() * x + self.laplacian._matmul(x)
+
+    def _matmul(self, x):
+        for _ in range(self._kwargs['kernel'].nu):
+            x = self._base(x)
+
+        return x
+
+    def _solve(self, rhs: torch.Tensor, preconditioner: Callable, num_tridiag: int = 0) -> torch.Tensor:
+        return utils.linear_cg(
+            self._base,
+            rhs,
+            n_tridiag=num_tridiag,
+            max_iter=settings.max_cg_iterations.value(),
+            max_tridiag_iter=settings.max_lanczos_quadrature_iterations.value(),
+            preconditioner=preconditioner,
+        )
+
+    def solve(self, x: torch.Tensor) -> torch.Tensor:
+        nu = self._kwargs['kernel'].nu
+
+        with settings.fast_computations.solves(True) and settings.max_cholesky_size(1):
+            for _ in range(nu):
+                x = super().solve(x, None)
+
+        return x
+
+    def _size(self):
+        dim = self._kwargs['kernel'].nodes.shape[0]
+        return torch.Size([dim, dim])
+
+    def _transpose_nonbatch(self):
+        return self
+
+    def evaluate_kernel(self):
+        return self
+
+    def matmul(self, other: Union[torch.Tensor, "LinearOperator"]) -> Union[torch.Tensor, "LinearOperator"]:
+        return self._matmul(other)
+
+
+class PrecisionMaternOperator3(LinearOperator):
+    def __init__(self, values, kernel):
+        super(PrecisionMaternOperator3, self).__init__(values, kernel=kernel)
+
+        self.laplacian = LaplacianRandomWalk(values, kernel)
+
+    def _base(self, x):
+        return 2*self._kwargs['kernel'].nu / self._kwargs['kernel'].lengthscale.square().squeeze() * x + self.laplacian._matmul(x)
+
+    def _matmul(self, x):
+        x = self.laplacian.degree.pow(-1).view(-1, 1) * x
+
+        for _ in range(self._kwargs['kernel'].nu):
+            x = self._base(x)
+
+        return x
+
+    def _solve(self, rhs: torch.Tensor, preconditioner: Callable, num_tridiag: int = 0) -> torch.Tensor:
+        return utils.linear_cg(
+            self._base,
+            rhs,
+            n_tridiag=num_tridiag,
+            max_iter=settings.max_cg_iterations.value(),
+            max_tridiag_iter=settings.max_lanczos_quadrature_iterations.value(),
+            preconditioner=preconditioner,
+        )
+
+    def solve(self, x: torch.Tensor) -> torch.Tensor:
+        nu = self._kwargs['kernel'].nu
+
+        with settings.fast_computations.solves(True) and settings.max_cholesky_size(1):
+            for _ in range(nu):
+                x = super().solve(x, None)
+
+        return self.laplacian.degree.view(-1, 1)*x
 
     def _size(self):
         dim = self._kwargs['kernel'].nodes.shape[0]
