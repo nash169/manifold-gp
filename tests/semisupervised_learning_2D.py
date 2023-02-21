@@ -49,8 +49,8 @@ test_y = noisy_y[test_idx]
 
 # Initialize kernel
 nu = 2
-neighbors = 50
-modes = 100
+neighbors = 10
+modes = 50
 kernel = gpytorch.kernels.ScaleKernel(RiemannMaternKernel(nu=nu, nodes=noisy_x, neighbors=neighbors, modes=modes))
 
 # Initialize likelihood and model
@@ -63,6 +63,7 @@ hypers = {
     'covar_module.base_kernel.epsilon': 0.5,
     'covar_module.base_kernel.lengthscale': 0.5,
     'covar_module.outputscale': 1.0,
+    'covar_module.base_kernel.support_kernel.lengthscale': 0.1
 }
 model.initialize(**hypers)
 

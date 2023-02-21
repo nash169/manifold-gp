@@ -56,7 +56,7 @@ model.initialize(**hypers)
 
 # Train model
 lr = 1e-2
-iters = 100
+iters = 500
 verbose = True
 loss = model.manifold_informed_train(lr, iters, verbose)
 

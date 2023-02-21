@@ -51,7 +51,8 @@ test_y = noisy_y[test_idx]
 nu = 2
 neighbors = 10
 modes = 50
-kernel = gpytorch.kernels.ScaleKernel(RiemannMaternKernel(nu=nu, nodes=train_x, neighbors=neighbors, modes=modes))
+support_kernel = gpytorch.kernels.RBFKernel()
+kernel = gpytorch.kernels.ScaleKernel(RiemannMaternKernel(nu=nu, nodes=train_x, neighbors=neighbors, modes=modes, support_kernel=support_kernel))
 
 # Initialize likelihood and model
 likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=gpytorch.constraints.GreaterThan(1e-8))
@@ -63,6 +64,7 @@ hypers = {
     'covar_module.base_kernel.epsilon': 0.5,
     'covar_module.base_kernel.lengthscale': 0.5,
     'covar_module.outputscale': 1.0,
+    'covar_module.base_kernel.support_kernel.lengthscale': 0.1
 }
 model.initialize(**hypers)
 
