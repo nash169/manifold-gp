@@ -3,10 +3,10 @@
 
 import torch
 
-from .riemann_kernel import RiemannKernel, LaplacianSymmetric, LaplacianRandomWalk
+from .riemann_kernel import RiemannKernel, LaplacianRandomWalk
 
-from typing import Optional, Union, Callable
-from linear_operator import LinearOperator, settings, utils
+from typing import Optional, Tuple
+from linear_operator import LinearOperator, to_linear_operator
 
 
 class RiemannMaternKernel(RiemannKernel):
@@ -14,172 +14,30 @@ class RiemannMaternKernel(RiemannKernel):
 
     def __init__(self, nu: Optional[int] = 2, **kwargs):
         super(RiemannMaternKernel, self).__init__(**kwargs)
-        self.nu = nu
+        self.nu = torch.tensor(nu, dtype=torch.float)
 
     def spectral_density(self):
-        s = (2*self.nu / self.lengthscale.square() +
-             self.eigenvalues).pow(-self.nu)  # *self.nodes.shape[0]
+        s = (2*self.nu / self.lengthscale.square() + self.eigenvalues).pow(-self.nu)
         return s / s.sum()
 
     def precision(self):
-        # return PrecisionMaternOperator2(self.values, kernel=self)
-        # return PrecisionMaternOperator(self.laplacian(), kernel=self)
-        return PrecisionMaternOperator3(self.values, kernel=self)
+        return PrecisionMatern(self.nu, self.lengthscale, self.laplacian(operator='randomwalk'))
 
 
-class PrecisionMaternOperator(LinearOperator):
-    def __init__(self, laplacian, kernel):
-        super(PrecisionMaternOperator, self).__init__(
-            laplacian, kernel=kernel)
+class PrecisionMatern(LinearOperator):
+    def __init__(self, nu, lengthscale, laplacian):
+        super(PrecisionMatern, self).__init__(nu, lengthscale, laplacian)
 
     def _matmul(self, x):
-        r = self._kwargs['kernel'].indices[0, :]
-        c = self._kwargs['kernel'].indices[1, :]
-        v = self._args[0]
-        nu = self._kwargs['kernel'].nu
-        k = self._kwargs['kernel'].lengthscale
+        x = self._args[2]._args[1].view(-1, 1) * x
 
-        for _ in range(nu):
-            x = x.mul(2*nu/k.square().squeeze() + 1).index_add(0, r, v.view(-1, 1)
-                                                               * x[c], alpha=-1).index_add(0, c, v.view(-1, 1)*x[r], alpha=-1)
-
-        return x
-
-    def _base(self, x):
-        r = self._kwargs['kernel'].indices[0, :]
-        c = self._kwargs['kernel'].indices[1, :]
-        v = self._args[0]
-        nu = self._kwargs['kernel'].nu
-        k = self._kwargs['kernel'].lengthscale
-
-        return x.mul(2*nu/k.square().squeeze() + 1).index_add(0, r, v.view(-1, 1) * x[c], alpha=-1).index_add(0, c, v.view(-1, 1)*x[r], alpha=-1)
-
-    def _solve(self, rhs: torch.Tensor, preconditioner: Callable, num_tridiag: int = 0) -> torch.Tensor:
-        return utils.linear_cg(
-            self._base,
-            rhs,
-            n_tridiag=num_tridiag,
-            max_iter=settings.max_cg_iterations.value(),
-            max_tridiag_iter=settings.max_lanczos_quadrature_iterations.value(),
-            preconditioner=preconditioner,
-        )
-
-    def solve(self, x: torch.Tensor) -> torch.Tensor:
-        nu = self._kwargs['kernel'].nu
-
-        with settings.fast_computations.solves(True) and settings.max_cholesky_size(1):
-            for _ in range(nu):
-                x = super().solve(x, None)
+        for _ in range(self._args[0].int()):
+            x = x * 2*self._args[0] / self._args[1].square().squeeze() + self._args[2]._matmul(x)
 
         return x
 
     def _size(self):
-        dim = self._kwargs['kernel'].nodes.shape[0]
-        return torch.Size([dim, dim])
+        return self._args[2]._size()
 
     def _transpose_nonbatch(self):
         return self
-
-    def evaluate_kernel(self):
-        return self
-
-    def matmul(self, other: Union[torch.Tensor, "LinearOperator"]) -> Union[torch.Tensor, "LinearOperator"]:
-        return self._matmul(other)
-
-
-class PrecisionMaternOperator2(LinearOperator):
-    def __init__(self, values, kernel):
-        super(PrecisionMaternOperator2, self).__init__(values, kernel=kernel)
-
-        self.laplacian = LaplacianSymmetric(values, kernel)
-
-    def _base(self, x):
-        return 2*self._kwargs['kernel'].nu / self._kwargs['kernel'].lengthscale.square().squeeze() * x + self.laplacian._matmul(x)
-
-    def _matmul(self, x):
-        for _ in range(self._kwargs['kernel'].nu):
-            x = self._base(x)
-
-        return x
-
-    def _solve(self, rhs: torch.Tensor, preconditioner: Callable, num_tridiag: int = 0) -> torch.Tensor:
-        return utils.linear_cg(
-            self._base,
-            rhs,
-            n_tridiag=num_tridiag,
-            max_iter=settings.max_cg_iterations.value(),
-            max_tridiag_iter=settings.max_lanczos_quadrature_iterations.value(),
-            preconditioner=preconditioner,
-        )
-
-    def solve(self, x: torch.Tensor) -> torch.Tensor:
-        nu = self._kwargs['kernel'].nu
-
-        with settings.fast_computations.solves(True) and settings.max_cholesky_size(1):
-            for _ in range(nu):
-                x = super().solve(x, None)
-
-        return x
-
-    def _size(self):
-        dim = self._kwargs['kernel'].nodes.shape[0]
-        return torch.Size([dim, dim])
-
-    def _transpose_nonbatch(self):
-        return self
-
-    def evaluate_kernel(self):
-        return self
-
-    def matmul(self, other: Union[torch.Tensor, "LinearOperator"]) -> Union[torch.Tensor, "LinearOperator"]:
-        return self._matmul(other)
-
-
-class PrecisionMaternOperator3(LinearOperator):
-    def __init__(self, values, kernel):
-        super(PrecisionMaternOperator3, self).__init__(values, kernel=kernel)
-
-        self.laplacian = LaplacianRandomWalk(values, kernel)
-
-    def _base(self, x):
-        return 2*self._kwargs['kernel'].nu / self._kwargs['kernel'].lengthscale.square().squeeze() * x + self.laplacian._matmul(x)
-
-    def _matmul(self, x):
-        x = self.laplacian.degree.pow(-1).view(-1, 1) * x
-
-        for _ in range(self._kwargs['kernel'].nu):
-            x = self._base(x)
-
-        return x
-
-    def _solve(self, rhs: torch.Tensor, preconditioner: Callable, num_tridiag: int = 0) -> torch.Tensor:
-        return utils.linear_cg(
-            self._base,
-            rhs,
-            n_tridiag=num_tridiag,
-            max_iter=settings.max_cg_iterations.value(),
-            max_tridiag_iter=settings.max_lanczos_quadrature_iterations.value(),
-            preconditioner=preconditioner,
-        )
-
-    def solve(self, x: torch.Tensor) -> torch.Tensor:
-        nu = self._kwargs['kernel'].nu
-
-        with settings.fast_computations.solves(True) and settings.max_cholesky_size(1):
-            for _ in range(nu):
-                x = super().solve(x, None)
-
-        return self.laplacian.degree.view(-1, 1)*x
-
-    def _size(self):
-        dim = self._kwargs['kernel'].nodes.shape[0]
-        return torch.Size([dim, dim])
-
-    def _transpose_nonbatch(self):
-        return self
-
-    def evaluate_kernel(self):
-        return self
-
-    def matmul(self, other: Union[torch.Tensor, "LinearOperator"]) -> Union[torch.Tensor, "LinearOperator"]:
-        return self._matmul(other)

@@ -30,43 +30,24 @@ class RiemannGP(gpytorch.models.ExactGP):
     def eval(self):
         # Generate eigenfunctions for kernel evaluation
         if hasattr(self.covar_module, 'base_kernel'):
-            self.covar_module.base_kernel.solve_laplacian()
+            self.covar_module.base_kernel.generate_eigenpairs()
         else:
-            self.covar_module.solve_laplacian()
+            self.covar_module.generate_eigenpairs()
 
         return super().eval()
 
-    def noiseless_precision(self, x):
-        kernel = self.covar_module.base_kernel if hasattr(
-            self.covar_module, 'base_kernel') else self.covar_module
-
-        if self.labels is None:
-            z = x
-            z = kernel.precision().matmul(z)
+    def noise_precision(self):
+        # Supervised / Semisupervised Learning
+        if self.labels is not None:
+            opt = SemiSupervisedWrapper(self.labels, self.covar_module.base_kernel.precision() if hasattr(self.covar_module, 'base_kernel') else self.covar_module.precision())
         else:
-            y = torch.zeros(kernel.nodes.shape[0], x.shape[1]).to(x.device)
-            y[self.labels, :] = x
-            y = kernel.precision().matmul(y)
+            opt = self.covar_module.base_kernel.precision() if hasattr(self.covar_module, 'base_kernel') else self.covar_module.precision()
 
-            Q_xx = y[self.labels, :]
-
-            y[self.labels, :] = 0.0
-            y = kernel.precision().solve(y)
-
-            not_labaled = torch.ones_like(y)
-            not_labaled[self.labels, :] = 0.0
-            z = y*not_labaled
-            z = kernel.precision().matmul(z)
-
-            z = Q_xx + z[self.labels, :]
-
+        # Scale output
         if hasattr(self.covar_module, 'outputscale'):
-            z /= self.covar_module.outputscale
+            opt = ScaleWrapper(self.covar_module.outputscale, opt)
 
-        return z
-
-    def noise_precision(self, x):
-        return self.noiseless_precision(x - self.likelihood.noise*self.noiseless_precision(x + self.likelihood.noise*self.noiseless_precision(x)))
+        return NoiseWrapper(self.likelihood.noise, opt)
 
     def manifold_informed_train(self, lr=1e-1, iter=100, verbose=True):
         # Training targets
@@ -82,41 +63,34 @@ class RiemannGP(gpytorch.models.ExactGP):
             self.covar_module.base_kernel.raw_epsilon.requires_grad = True
 
         # Optimizer
-        optimizer = torch.optim.Adam(
-            self.parameters(), lr=lr, weight_decay=1e-8)
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=1e-8)
 
-        with gpytorch.settings.fast_computations(log_prob=False) and gpytorch.settings.max_cholesky_size(300) and torch.autograd.set_detect_anomaly(True):
-            for i in range(iter):
-                # Zero gradients from previous iteration
-                optimizer.zero_grad()
+        # Iterations
+        for i in range(iter):
+            # Zero gradients from previous iteration
+            optimizer.zero_grad()
 
-                # Operator
-                opt = FunctionOperator(
-                    y, self.noise_precision).requires_grad_(True)
+            # Operator
+            opt = self.noise_precision()
 
-                # Loss
-                loss = 0.5 * sum([torch.dot(y.squeeze(), opt.matmul(y).squeeze()),
-                                  -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
+            # Loss
+            loss = 0.5 * sum([torch.dot(y.squeeze(), opt.matmul(y).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
 
-                # Gradient
-                loss.backward()
+            # Gradient
+            loss.backward()
 
-                # Print step information
-                if verbose:
-                    print(
-                        f"Iteration: {i}, Loss: {loss.item():0.3f}, Noise Variance: {self.likelihood.noise.sqrt().item():0.3f}", end='')
-                    if hasattr(self.covar_module, 'outputscale'):
-                        print(
-                            f", Signal Variance: {self.covar_module.outputscale.sqrt().item():0.3f}", end='')
-                    if hasattr(self.covar_module, 'base_kernel'):
-                        print(
-                            f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}, Epsilon: {self.covar_module.base_kernel.epsilon.item():0.3f}")
-                    else:
-                        print(
-                            f", Lengthscale: {self.covar_module.lengthscale.item():0.3f}, Epsilon: {self.covar_module.epsilon.item():0.3f}")
+            # Print step information
+            if verbose:
+                print(f"Iteration: {i}, Loss: {loss.item():0.3f}, Noise Variance: {self.likelihood.noise.sqrt().item():0.3f}", end='')
+                if hasattr(self.covar_module, 'outputscale'):
+                    print(f", Signal Variance: {self.covar_module.outputscale.sqrt().item():0.3f}", end='')
+                if hasattr(self.covar_module, 'base_kernel'):
+                    print(f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}, Epsilon: {self.covar_module.base_kernel.epsilon.item():0.3f}")
+                else:
+                    print(f", Lengthscale: {self.covar_module.lengthscale.item():0.3f}, Epsilon: {self.covar_module.epsilon.item():0.3f}")
 
-                # Step
-                optimizer.step()
+            # Step
+            optimizer.step()
 
         # Activate optimization mean parameters
         self.mean_module.raw_constant.requires_grad = True
@@ -129,70 +103,58 @@ class RiemannGP(gpytorch.models.ExactGP):
 
         return loss
 
-    def vanilla_train(self, lr=1e-1, iter=100, verbose=True):
-        # Extract eigenvalues and eigenvectors
-        if hasattr(self.covar_module, 'base_kernel'):
-            self.covar_module.base_kernel.solve_laplacian()
-        else:
-            self.covar_module.solve_laplacian()
 
-        # Train model
-        self.train()
-        self.likelihood.train()
-
-        # Optimizer
-        optimizer = torch.optim.Adam(
-            self.parameters(), lr=lr, weight_decay=1e-8)
-        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
-
-        for i in range(iter):
-            # Zero gradients from previous iteration
-            optimizer.zero_grad()
-
-            # Model output
-            output = self.forward(self.train_inputs[0])
-
-            # Loss
-            loss = -mll(output, self.train_targets)
-
-            # Gradient
-            loss.backward()
-
-            # Print step information
-            if verbose:
-                print(
-                    f"Iteration: {i}, Loss: {loss.item():0.3f}, Noise Variance: {self.likelihood.noise.sqrt().item():0.3f}", end='')
-                if hasattr(self.covar_module, 'outputscale'):
-                    print(
-                        f", Signal Variance: {self.covar_module.outputscale.sqrt().item():0.3f}", end='')
-                if hasattr(self.covar_module, 'base_kernel'):
-                    print(
-                        f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}, Epsilon: {self.covar_module.base_kernel.epsilon.item():0.3f}")
-                else:
-                    print(
-                        f", Lengthscale: {self.covar_module.lengthscale.item():0.3f}, Epsilon: {self.covar_module.epsilon.item():0.3f}")
-
-            # Step
-            optimizer.step()
-
-        return loss
-
-
-class FunctionOperator(LinearOperator):
-    def __init__(self, x, function):
-        super(FunctionOperator, self).__init__(x, function=function)
+class ScaleWrapper(LinearOperator):
+    def __init__(self, outputscale, operator):
+        super(ScaleWrapper, self).__init__(outputscale, operator)
 
     def _matmul(self, x):
-        return self._kwargs['function'](x)
+        return self._args[1]._matmul(x)/self._args[0]
+
+    def _size(self):
+        return self._args[1]._size()
+
+    def _transpose_nonbatch(self):
+        return self
+
+
+class NoiseWrapper(LinearOperator):
+    def __init__(self, noise, operator):
+        super(NoiseWrapper, self).__init__(noise, operator)
+
+    def _matmul(self, x):
+        return self._args[1]._matmul(x - self._args[0]*self._args[1]._matmul(x - self._args[0]*self._args[1]._matmul(x)))
+
+    def _size(self):
+        return self._args[1]._size()
+
+    def _transpose_nonbatch(self):
+        return self
+
+
+class SemiSupervisedWrapper(LinearOperator):
+    def __init__(self, indices, operator):
+        super(SemiSupervisedWrapper, self).__init__(indices, operator)
+
+    def _matmul(self, x):
+        y = torch.zeros(self._args[1]._size()[0], x.shape[1]).to(x.device)
+        y[self._args[0], :] = x
+        y = self._args[1]._matmul(y)
+
+        Q_xx = y[self._args[0], :]
+
+        y[self._args[0], :] = 0.0
+        y = self._args[1].solve(y)
+
+        not_labaled = torch.ones_like(y)
+        not_labaled[self._args[0], :] = 0.0
+        z = y*not_labaled
+        z = self._args[1]._matmul(z)
+
+        return Q_xx + z[self._args[0], :]
 
     def _size(self):
         return torch.Size([self._args[0].shape[0], self._args[0].shape[0]])
 
     def _transpose_nonbatch(self):
         return self
-
-    def evaluate_kernel(self):
-        return self
-
-    def matmul(self, other: Union[torch.Tensor, "LinearOperator"]) -> Union[torch.Tensor, "LinearOperator"]:
-        return self._matmul(other)
