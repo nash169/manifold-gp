@@ -3,13 +3,12 @@ import gpytorch
 import numpy as np
 import matplotlib.pyplot as plt
 from importlib.resources import files
-from manifold_gp.kernels.riemann_matern_kernel import RiemannMaternKernel
-from manifold_gp.models.riemann_gp import RiemannGP
 
+# Set device
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
-# Train dataset
+# Train Dataset
 train_x = torch.from_numpy(np.loadtxt(
     files('manifold_gp.data').joinpath('mnist_x_train.csv'))).float().to(device)
 train_y = torch.from_numpy(np.loadtxt(
@@ -17,13 +16,30 @@ train_y = torch.from_numpy(np.loadtxt(
 train_label = torch.from_numpy(np.loadtxt(
     files('manifold_gp.data').joinpath('mnist_label_train.csv'))).float().to(device)
 
-# Test dataset
+# Test Dataset
 test_x = torch.from_numpy(np.loadtxt(
     files('manifold_gp.data').joinpath('mnist_x_test.csv'))).float().to(device)
 test_y = torch.from_numpy(np.loadtxt(
     files('manifold_gp.data').joinpath('mnist_y_test.csv'))).float().to(device)
 test_label = torch.from_numpy(np.loadtxt(
     files('manifold_gp.data').joinpath('mnist_label_test.csv'))).float()
+
+# Generate Dataset
+# mnist = RotatedMNIST()
+# train_x += 0.5 # mnist.rescale(train_x)
+# test_x += 0.5 # mnist.rescale(test_x)
+# train_y = mnist.deg_to_rad(train_y)
+# test_y = mnist.deg_to_rad(test_y)
+
+# Remove digit
+digits = [0]
+for digit in digits:
+    train_x = train_x[train_label != digit]
+    train_y = train_y[train_label != digit]
+    train_label = train_label[train_label != digit]
+    test_x = test_x[test_label != digit]
+    test_y = test_y[test_label != digit]
+    test_label = test_label[test_label != digit]
 
 
 # Model
@@ -41,26 +57,26 @@ class ExactGPModel(gpytorch.models.ExactGP):
 
 
 # Training parameters
-lr = 1e-3
-iters = 500
-verbose = False
+lr = 1e-2
+iters = 1000
+verbose = True
 
 # Loop
 count = 1
-samples = 10
+samples = 1
 stats = torch.zeros(10, 2)
-loss_log = torch.zeros(samples, 1)
+loss = torch.zeros(samples, 1)
 
 for i in range(samples):
     print(f"Iteration: {count}/{samples}")
 
-    likelihood = gpytorch.likelihoods.GaussianLikelihood(
-        noise_constraint=gpytorch.constraints.GreaterThan(1e-8))
+    # Initialize likelihood and model
+    likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=gpytorch.constraints.GreaterThan(1e-8))
     model = ExactGPModel(train_x, train_y, likelihood).to(device)
 
     # Model Hyperparameters
     hypers = {
-        'likelihood.noise_covar.noise': 1e-5,
+        'likelihood.noise_covar.noise': 1e-4,
         'covar_module.base_kernel.lengthscale': np.random.rand(1),
         'covar_module.outputscale': np.random.rand(1),
     }
@@ -72,14 +88,19 @@ for i in range(samples):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
-    for _ in range(iters):
+    for k in range(iters):
         optimizer.zero_grad()
         output = model(train_x)
-        loss = -mll(output, train_y)
-        loss.backward()
+        loss_curr = -mll(output, train_y)
+        loss_curr.backward()
+        if verbose:
+            print('Iter %d/%d - Loss: %.5f   lengthscale: %.5f   noise: %.5f' % (
+                k + 1, iters, loss_curr.item(),
+                model.covar_module.base_kernel.lengthscale.item(),
+                model.likelihood.noise.item()))
         optimizer.step()
 
-    loss_log[i] = loss
+    loss[i] = loss_curr
 
     # Model Evaluation
     likelihood.eval()
@@ -87,51 +108,48 @@ for i in range(samples):
 
     with torch.no_grad(), gpytorch.settings.fast_pred_var():
         preds = likelihood(model(test_x))
-        error = test_y.cpu() - preds.mean.cpu()
+        error = (test_y - preds.mean).cpu()
         std = preds.stddev.cpu()
 
         for j in range(10):
-            stats[j, 0] += torch.norm(
-                error[test_label == j])/error[test_label == j].shape[0]
-            stats[j, 1] += torch.sum(std[test_label == j]) / \
-                std[test_label == j].shape[0]
+            if torch.any(test_label == j) == True:
+                stats[j, 0] += error[test_label == j].abs().sum() / error[test_label == j].shape[0]
+                stats[j, 1] += std[test_label == j].abs().sum() / std[test_label == j].shape[0]
+            else:
+                stats[j, 0] += 0
+                stats[j, 1] += 0
 
         # Largest error
-        err, idx_err = torch.sort(error.abs(), descending=True)
+        idx_err = torch.argsort(error.abs(), descending=True)
         fig = plt.figure()
         fig.subplots_adjust(wspace=1.2)
         for i in range(6):
             ax = fig.add_subplot(2, 3, i+1)
-            ax.imshow(test_x[idx_err[i], :].cpu().numpy().reshape(
-                28, 28, order='F'), cmap='gray')
+            ax.imshow(test_x[idx_err[i], :].cpu().numpy().reshape(28, 28, order='F'), cmap='gray')
+
             ax.set_title('Label: ' + str(test_label.cpu().numpy()[idx_err[i]]) + ' Index: ' + str(idx_err.cpu().numpy()[i]) +
-                         '\nTruth: ' + str(test_y.cpu().numpy()[idx_err[i]]) +
-                         '\nGP: ' + str(preds.mean.cpu().numpy()[idx_err[i]]) +
-                         '\nError: ' + str(err.cpu().numpy()[i]) +
-                         '\nStd: ' + str(preds.stddev.cpu().numpy()[idx_err[i]]), fontsize=10)
-        fig.savefig('outputs/vanilla_err_' + str(count) + '.png')
+                         '\nTruth: ' + str(test_y.cpu().numpy()[idx_err[i]]) + '\nGP: ' + str(preds.mean.cpu().numpy()[idx_err[i]]) +
+                         '\nError: ' + str(error[idx_err[i]].cpu().numpy()) + '\nStd: ' + str(preds.stddev.cpu().numpy()[idx_err[i]]), fontsize=10)
+        fig.savefig('outputs/vanilla'+'_err_' + str(count) + '.png')
 
         # Largest standard deviation
-        std, idx_std = torch.sort(std, descending=True)
+        idx_std = torch.argsort(std, descending=True)
         fig = plt.figure()
         fig.subplots_adjust(wspace=1.0)
         for i in range(6):
             ax = fig.add_subplot(2, 3, i+1)
-            ax.imshow(test_x[idx_err[i], :].cpu().numpy().reshape(
-                28, 28, order='F'), cmap='gray')
-            ax.set_title('Label: ' + str(test_label.cpu().numpy()[idx_err[i]]) + ' Index: ' + str(idx_err.cpu().numpy()[i]) +
-                         '\nTruth: ' + str(test_y.cpu().numpy()[idx_err[i]]) +
-                         '\nGP: ' + str(preds.mean.cpu().numpy()[idx_err[i]]) +
-                         '\nError: ' + str(err.cpu().numpy()[i]) +
-                         '\nStd: ' + str(preds.stddev.cpu().numpy()[idx_err[i]]), fontsize=10)
-        fig.savefig('outputs/vanilla_std_' + str(count) + '.png')
+            ax.imshow(test_x[idx_std[i], :].cpu().numpy().reshape(28, 28, order='F'), cmap='gray')
+            ax.set_title('Label: ' + str(test_label.cpu().numpy()[idx_std[i]]) + ' Index: ' + str(idx_std.cpu().numpy()[i]) +
+                         '\nTruth: ' + str(test_y.cpu().numpy()[idx_std[i]]) + '\nGP: ' + str(preds.mean.cpu().numpy()[idx_std[i]]) +
+                         '\nError: ' + str(error[idx_std[i]].cpu().numpy()) + '\nStd: ' + str(preds.stddev.cpu().numpy()[idx_std[i]]), fontsize=10)
+        fig.savefig('outputs/vanilla' + '_std_' + str(count) + '.png')
 
     count += 1
 
 stats /= samples
-stats = stats * 180 / torch.pi
+# stats = stats * 180 / torch.pi
 results = torch.cat((stats[:, 0].unsqueeze(-1), (stats[:, 0] + stats[:, 1]).unsqueeze(-1),
-                    (stats[:, 0] - stats[:, 1]).unsqueeze(-1), stats[:, 1].unsqueeze(-1), loss_log), dim=1)
+                    (stats[:, 0] - stats[:, 1]).unsqueeze(-1), stats[:, 1].unsqueeze(-1), loss), dim=1)
 np.savetxt('outputs/vanilla.csv', results.detach().numpy())
 
 # mse = torch.linalg.norm(test_y - preds.mean)/test_y.shape[0]
