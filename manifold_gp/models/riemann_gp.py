@@ -50,6 +50,9 @@ class RiemannGP(gpytorch.models.ExactGP):
         return NoiseWrapper(self.likelihood.noise, opt)
 
     def manifold_informed_train(self, lr=1e-1, iter=100, verbose=True):
+        self.train()
+        self.likelihood.train()
+
         # Training targets
         y = self.train_targets.unsqueeze(-1)
 
@@ -76,6 +79,12 @@ class RiemannGP(gpytorch.models.ExactGP):
             # Loss
             loss = 0.5 * sum([torch.dot(y.squeeze(), opt.matmul(y).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
 
+            # Add log probs of priors on the (functions of) parameters
+            loss_ndim = loss.ndim
+            for _, module, prior, closure, _ in self.named_priors():
+                prior_term = prior.log_prob(closure(module))
+                loss.add_(prior_term.view(*prior_term.shape[:loss_ndim], -1).sum(dim=-1))
+
             # Gradient
             loss.backward()
 
@@ -100,8 +109,6 @@ class RiemannGP(gpytorch.models.ExactGP):
             self.covar_module.raw_epsilon.requires_grad = False
         except:
             self.covar_module.base_kernel.raw_epsilon.requires_grad = False
-
-        return loss
 
 
 class ScaleWrapper(LinearOperator):
