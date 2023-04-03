@@ -2,25 +2,31 @@
 # encoding: utf-8
 
 from abc import abstractmethod
-from typing import Optional
 
 import torch
 import faiss
 import faiss.contrib.torch_utils
 
 import gpytorch
-from gpytorch.constraints import Positive
+from gpytorch.constraints import Positive, GreaterThan
 
 from torch_geometric.utils import coalesce
 
 from typing import Optional, Tuple, Union
 from linear_operator import LinearOperator
 
+from manifold_gp.priors.inverse_gamma_prior import InverseGammaPrior
+
 
 class RiemannKernel(gpytorch.kernels.Kernel):
     has_lengthscale = True
 
-    def __init__(self, nodes: torch.Tensor, neighbors: Optional[int] = 2, modes: Optional[int] = 10, support_kernel: Optional[gpytorch.kernels.Kernel] = gpytorch.kernels.RBFKernel(), **kwargs):
+    def __init__(self,
+                 nodes: torch.Tensor, neighbors: Optional[int] = 2,
+                 modes: Optional[int] = 10,
+                 support_kernel: Optional[gpytorch.kernels.Kernel] = gpytorch.kernels.RBFKernel(),
+                 epsilon_prior: Optional[gpytorch.priors.Prior] = None,
+                 **kwargs):
         super(RiemannKernel, self).__init__(**kwargs)
 
         # Hyperparameter
@@ -29,21 +35,40 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         self.modes = modes
         self.support_kernel = support_kernel
 
-        # Heat kernel length parameter for Laplacian approximation
-        self.register_parameter(
-            name='raw_epsilon', parameter=torch.nn.Parameter(torch.zeros(*self.batch_shape, 1, 1).to(nodes.device), requires_grad=True)
-        )
-        self.register_constraint("raw_epsilon", Positive())
-
         # KNN Faiss
         if self.nodes.is_cuda:
             res = faiss.StandardGpuResources()
-            self.knn = faiss.GpuIndexFlatL2(res, self.nodes.shape[1])
+            self.knn = faiss.GpuIndexIVFFlat(res, self.nodes.shape[1], 1, faiss.METRIC_L2)
+            # res = faiss.StandardGpuResources()
+            # self.knn = faiss.GpuIndexFlatL2(res, self.nodes.shape[1])
         else:
             self.knn = faiss.IndexFlatL2(self.nodes.shape[1])
 
         # Build graph
         self.generate_graph()
+
+        # Heat kernel length parameter for Laplacian approximation
+        self.register_parameter(
+            name='raw_epsilon', parameter=torch.nn.Parameter(torch.zeros(*self.batch_shape, 1, 1).to(nodes.device), requires_grad=True)
+        )
+
+        if epsilon_prior is not None:
+            if not isinstance(epsilon_prior, gpytorch.priors.Prior):
+                raise TypeError("Expected gpytorch.priors.Prior but got " + type(epsilon_prior).__name__)
+            self.register_prior(
+                "epsilon_prior", epsilon_prior, self._epsilon_param, self._epsilon_closure
+            )
+
+        # self.register_prior(
+        #     "epsilon_prior", InverseGammaPrior(self.eps_concentration, self.eps_rate), self._epsilon_param, self._epsilon_closure
+        # )
+
+        # self.register_prior(
+        #     "epsilon_prior", gpytorch.priors.GammaPrior(self.eps_concentration, self.eps_rate), self._epsilon_param, self._epsilon_closure
+        # )
+
+        # self.register_constraint("raw_epsilon", GreaterThan(self.eps_gte))
+        self.register_constraint("raw_epsilon", Positive())
 
     @abstractmethod
     def spectral_density(self):
@@ -81,12 +106,22 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         self.initialize(
             raw_epsilon=self.raw_epsilon_constraint.inverse_transform(value))
 
+    def _epsilon_param(self, m):
+        return m.epsilon
+
+    def _epsilon_closure(self, m, v):
+        return m._set_epsilon(v)
+
     def generate_graph(self):
         # KNN Search
         self.knn.reset()
         self.knn.train(self.nodes)
         self.knn.add(self.nodes)
         val, idx = self.knn.search(self.nodes, self.neighbors+1)
+
+        # Calculate epsilon lower constraint
+        min_weight = torch.tensor(1e-4).to(self.nodes.device)
+        self.eps_gte = val[:, 1].max().div(-2*min_weight.log()).sqrt()
 
         # Symmetric KNN
         rows = torch.arange(idx.shape[0]).repeat_interleave(
@@ -99,6 +134,14 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         idx = torch.stack([rows, cols], dim=0)
         val = torch.cat([val[split], val[~split]])
         self.indices, self.values = coalesce(idx, val, reduce='mean')
+
+        # # Calculate epsilon prior parameter (Inverse Gamma)
+        # self.eps_concentration = self.values.sqrt().std().pow(-1)*100.0
+        # self.eps_rate = (self.eps_concentration+1)*self.values.sort()[0][int(self.values.shape[0]*0.99)].sqrt()
+
+        # # Gamma distribution
+        # self.eps_concentration = 100.0*self.values.sqrt().std().pow(-1) * self.values.sort()[0][int(self.values.shape[0]*0.99)].sqrt() + 1
+        # self.eps_rate = 100.0*self.values.sqrt().std().pow(-1)
 
     def laplacian(self, operator):
         if operator == 'symmetric':
@@ -131,7 +174,9 @@ class RiemannKernel(gpytorch.kernels.Kernel):
             return LaplacianRandomWalk(val, deg.pow(-1), idx, self)
 
     def generate_eigenpairs(self):
-        self.eigenvalues, self.eigenvectors = self.laplacian(operator='randomwalk').diagonalization()
+        evals, evecs = self.laplacian(operator='randomwalk').diagonalization()
+        self.eigenvalues = evals.detach()
+        self.eigenvectors = evecs.detach()
 
     def eigenfunctions(self, x):
         distances, indices = self.knn.search(x, self.neighbors)  # self.neighbors or fix it
@@ -189,4 +234,22 @@ class LaplacianRandomWalk(LinearOperator):
 
     def diagonalization(self) -> Tuple[torch.Tensor, torch.Tensor]:
         evals, evecs = self._kwargs['kernel'].laplacian(operator='symmetric').diagonalization()
-        return evals, evecs.mul_(self._args[1].sqrt().view(-1, 1))
+        evecs = evecs.mul(self._args[1].sqrt().view(-1, 1))
+
+        # opt = self._kwargs['kernel'].laplacian(operator='symmetric')
+        # val = -opt._args[0]
+        # idx = opt._args[1]
+        # from scipy.sparse import coo_matrix
+        # from scipy.sparse.linalg import eigsh
+        # val = torch.cat(
+        #     (val.repeat(2), torch.ones(self._kwargs['kernel'].nodes.shape[0]).to(self._kwargs['kernel'].nodes.device)), dim=0)
+        # idx = torch.cat((idx, torch.stack((idx[1, :], idx[0, :]), dim=0), torch.arange(
+        #     self._kwargs['kernel'].nodes.shape[0]).repeat(2, 1).to(self._kwargs['kernel'].nodes.device)), dim=1)
+        # L = coo_matrix(
+        #     (val.detach().cpu().numpy(), (idx[0, :].cpu().numpy(), idx[1, :].cpu().numpy())), shape=(self._kwargs['kernel'].nodes.shape[0], self._kwargs['kernel'].nodes.shape[0]))
+        # T, V = eigsh(L, k=self._kwargs['kernel'].modes, which='SM')
+        # evals = torch.from_numpy(T).float().to(self._kwargs['kernel'].nodes.device)
+        # evecs = torch.from_numpy(V).float().to(self._kwargs['kernel'].nodes.device)
+        # evecs = evecs.mul(self._args[1].sqrt().view(-1, 1))
+
+        return evals, evecs
