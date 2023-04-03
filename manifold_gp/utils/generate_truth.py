@@ -61,3 +61,5 @@ def groundtruth_from_samples(X):
     Y = np.zeros((X.shape[0]))
     for i in range(X.shape[0]):
         Y[i] = 0.5*np.sin(5e2 * geodesics.get(i)**2)
+
+    return Y

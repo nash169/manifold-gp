@@ -196,11 +196,11 @@ mv_opt = opt.matmul(y.view(-1, 1)).squeeze()
 #     loss = opt.inv_quad_logdet(logdet=True)[1]  # mv_opt.sum()
 
 # loss = 0.5 * sum([torch.dot(z, mv), -torch.logdet(Pr), z.size(-1) * math.log(2 * math.pi)])  # mv.sum()
-# loss = 0.5 * sum([torch.dot(y, mv), -torch.logdet(Pr), y.size(-1) * math.log(2 * math.pi)])  # mv.sum()
+loss = 0.5 * sum([torch.dot(y, mv), -torch.logdet(Pr), y.size(-1) * math.log(2 * math.pi)])  # mv.sum()
 
 # with gpytorch.settings.max_cholesky_size(300):
 # loss = 0.5 * sum([torch.dot(z, opt.matmul(z.unsqueeze(-1)).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], z.size(-1) * math.log(2 * math.pi)])
-loss = 0.5 * sum([torch.dot(y, opt.matmul(y.unsqueeze(-1)).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
+# loss = 0.5 * sum([torch.dot(y, opt.matmul(y.unsqueeze(-1)).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
 
 # D.retain_grad()
 loss.backward()
