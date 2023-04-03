@@ -20,6 +20,7 @@ device = torch.device("cuda" if use_cuda else "cpu")
 
 # Load mesh and generate ground truth
 data_path = files('manifold_gp.data').joinpath('dragon10k.stl')
+# data_path = files('manifold_gp.data').joinpath('dragon100k.msh')
 nodes, faces, truth = groundtruth_from_mesh(data_path)
 sampled_x = torch.from_numpy(nodes).float().to(device)
 sampled_y = torch.from_numpy(truth).float().to(device)
@@ -56,7 +57,7 @@ model.initialize(**hypers)
 
 # Train model
 lr = 1e-2
-iters = 500
+iters = 100
 verbose = True
 loss = model.manifold_informed_train(lr, iters, verbose)
 
