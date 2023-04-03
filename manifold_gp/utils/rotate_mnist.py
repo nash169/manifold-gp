@@ -14,23 +14,26 @@ class RotatedMNIST():
         self.test_x = 'http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz'
         self.test_labels = 'http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz'
 
-    def generate_trainset(self, rows, cols, save=False):
-        # Inputs
-        request = requests.get(self.train_x)
-        open("/tmp/train_x.gz", "wb").write(request.content)
-        with gzip.open("/tmp/train_x.gz") as bytestream:
-            bytestream.read(16)
-            buf = bytestream.read(28 * 28 * 60000 * 1)
-            X = self.scale(np.frombuffer(buf, dtype=np.uint8).astype(
-                np.float32)).reshape(60000, 28, 28)
+    def generate_trainset(self, rows, cols, dataset=None, save=False):
+        if dataset is None:
+            # Inputs
+            request = requests.get(self.train_x)
+            open("/tmp/train_x.gz", "wb").write(request.content)
+            with gzip.open("/tmp/train_x.gz") as bytestream:
+                bytestream.read(16)
+                buf = bytestream.read(28 * 28 * 60000 * 1)
+                X = self.scale(np.frombuffer(buf, dtype=np.uint8).astype(
+                    np.float32)).reshape(60000, 28, 28)
 
-        # Labels
-        request = requests.get(self.train_labels)
-        open("/tmp/train_labels.gz", "wb").write(request.content)
-        with gzip.open("/tmp/train_labels.gz") as bytestream:
-            bytestream.read(8)
-            buf = bytestream.read(1 * 60000)
-            labels = np.frombuffer(buf, dtype=np.uint8).astype(np.int64)
+            # Labels
+            request = requests.get(self.train_labels)
+            open("/tmp/train_labels.gz", "wb").write(request.content)
+            with gzip.open("/tmp/train_labels.gz") as bytestream:
+                bytestream.read(8)
+                buf = bytestream.read(1 * 60000)
+                labels = np.frombuffer(buf, dtype=np.uint8).astype(np.int64)
+        else:
+            X, labels = dataset
 
         # Outputs
         y = np.random.uniform(low=-45, high=45, size=(rows, cols))
@@ -59,23 +62,26 @@ class RotatedMNIST():
 
         return train_x, train_y, train_labels
 
-    def generate_testset(self, rows, cols, save=False):
-        # Inputs
-        request = requests.get(self.test_x)
-        open("/tmp/test_x.gz", "wb").write(request.content)
-        with gzip.open("/tmp/test_x.gz") as bytestream:
-            bytestream.read(16)
-            buf = bytestream.read(28 * 28 * 10000 * 1)
-            X = self.scale(np.frombuffer(buf, dtype=np.uint8).astype(
-                np.float32)).reshape(10000, 28, 28)
+    def generate_testset(self, rows, cols, dataset=None, save=False):
+        if dataset is None:
+            # Inputs
+            request = requests.get(self.test_x)
+            open("/tmp/test_x.gz", "wb").write(request.content)
+            with gzip.open("/tmp/test_x.gz") as bytestream:
+                bytestream.read(16)
+                buf = bytestream.read(28 * 28 * 10000 * 1)
+                X = self.scale(np.frombuffer(buf, dtype=np.uint8).astype(
+                    np.float32)).reshape(10000, 28, 28)
 
-        # Labels
-        request = requests.get(self.test_labels)
-        open("/tmp/test_labels.gz", "wb").write(request.content)
-        with gzip.open("/tmp/test_labels.gz") as bytestream:
-            bytestream.read(8)
-            buf = bytestream.read(1 * 10000)
-            labels = np.frombuffer(buf, dtype=np.uint8).astype(np.int64)
+            # Labels
+            request = requests.get(self.test_labels)
+            open("/tmp/test_labels.gz", "wb").write(request.content)
+            with gzip.open("/tmp/test_labels.gz") as bytestream:
+                bytestream.read(8)
+                buf = bytestream.read(1 * 10000)
+                labels = np.frombuffer(buf, dtype=np.uint8).astype(np.int64)
+        else:
+            X, labels = dataset
 
         # Outputs
         y = np.random.uniform(low=-45, high=45, size=(rows, cols))
