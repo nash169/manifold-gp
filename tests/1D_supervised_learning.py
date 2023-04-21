@@ -13,7 +13,7 @@ from manifold_gp.models.riemann_gp import RiemannGP
 from manifold_gp.models.vanilla_gp import VanillaGP
 from manifold_gp.utils.generate_truth import groundtruth_from_samples
 
-data_path = files('manifold_gp.data').joinpath('dumbbell240.msh')
+data_path = files('manifold_gp.data').joinpath('dumbbell.msh')
 data = np.loadtxt(data_path)
 sampled_x = torch.from_numpy(data[:, :2]).float()
 sampled_y = torch.from_numpy(data[:, -1]).float()
