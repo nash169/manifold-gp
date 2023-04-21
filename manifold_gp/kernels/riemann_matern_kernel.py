@@ -18,7 +18,9 @@ class RiemannMaternKernel(RiemannKernel):
 
     def spectral_density(self):
         s = (2*self.nu / self.lengthscale.square() + self.eigenvalues).pow(-self.nu)
-        return s / s.sum()
+        s /= s.sum()
+        s = s.sqrt()
+        return s
 
     def precision(self):
         return PrecisionMatern(self.nu, self.lengthscale, self.laplacian(operator='randomwalk'))
