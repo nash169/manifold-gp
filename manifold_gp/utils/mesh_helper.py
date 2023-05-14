@@ -40,29 +40,55 @@ def groundtruth_from_mesh(mesh_file):
     return mesh.vertices, mesh.faces, ground_truth
 
 
-def groundtruth_from_samples(X):
-    import faiss
+# def groundtruth_from_samples(X):
+#     import faiss
+#     import networkx as nx
+#     import numpy as np
+
+#     index = faiss.IndexFlatL2(X.shape[1])
+#     index.train(X)
+#     index.add(X)
+#     distances, neighbors = index.search(X, 3)
+
+#     graph = nx.Graph()
+#     for i in range(X.shape[0]):
+#         graph.add_node(i, pos=(X[i, 0], X[i, 1]))
+#     for i in range(X.shape[0]):
+#         graph.add_edge(i, neighbors[i, 1], length=distances[i, 1])
+#         graph.add_edge(i, neighbors[i, 2], length=distances[i, 2])
+
+#     geodesics = nx.shortest_path_length(graph, source=0, weight='length')
+#     Y = np.zeros((X.shape[0]))
+#     period = 2*np.pi / 0.3 * 2
+#     for i in range(X.shape[0]):
+#         Y[i] = 2 * np.sin(np.power(geodesics.get(i), 2) * period + 0.3)
+#     return Y
+
+def groundtruth_from_samples(vertices, edges):
     import networkx as nx
     import numpy as np
 
-    index = faiss.IndexFlatL2(X.shape[1])
-    index.train(X)
-    index.add(X)
-    distances, neighbors = index.search(X, 3)
-
     graph = nx.Graph()
-    for i in range(X.shape[0]):
-        graph.add_node(i, pos=(X[i, 0], X[i, 1]))
-    for i in range(X.shape[0]):
-        graph.add_edge(i, neighbors[i, 1], length=distances[i, 1])
-        graph.add_edge(i, neighbors[i, 2], length=distances[i, 2])
 
+    # add nodes
+    for i in range(vertices.shape[0]):
+        graph.add_node(i, pos=(vertices[i, 0], vertices[i, 1]))
+
+    # edges
+    for i in range(edges.shape[0]):
+        graph.add_edge(edges[i, 0], edges[i, 1], length=np.linalg.norm(vertices[edges[i, 0], :]-vertices[edges[i, 1], :]))
+
+    # geodesics
     geodesics = nx.shortest_path_length(graph, source=0, weight='length')
-    Y = np.zeros((X.shape[0]))
-    for i in range(X.shape[0]):
-        Y[i] = 0.5*np.sin(100e2 * geodesics.get(i)**2)
 
-    return Y
+    # function
+    period = 1.5
+    phase = 0.0
+    truth = np.zeros((vertices.shape[0]))
+    for i in range(truth.shape[0]):
+        truth[i] = 2 * np.sin(geodesics.get(i) * period + phase)
+
+    return truth, geodesics
 
 
 def reduce_mesh(mesh_file):

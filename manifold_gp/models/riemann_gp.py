@@ -8,6 +8,8 @@ import gpytorch
 from linear_operator import LinearOperator
 from typing import Union
 
+from ..operators import SubBlockOperator, SchurComplementOperator
+
 
 class RiemannGP(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, kernel, labels=None):
@@ -39,7 +41,8 @@ class RiemannGP(gpytorch.models.ExactGP):
     def noise_precision(self):
         # Supervised / Semisupervised Learning
         if self.labels is not None:
-            opt = SemiSupervisedWrapper(self.labels, self.covar_module.base_kernel.precision() if hasattr(self.covar_module, 'base_kernel') else self.covar_module.precision())
+            # opt = SemiSupervisedWrapper(self.labels, self.covar_module.base_kernel.precision() if hasattr(self.covar_module, 'base_kernel') else self.covar_module.precision())
+            opt = SchurComplementOperator(self.covar_module.base_kernel.precision() if hasattr(self.covar_module, 'base_kernel') else self.covar_module.precision(), self.labels)
         else:
             opt = self.covar_module.base_kernel.precision() if hasattr(self.covar_module, 'base_kernel') else self.covar_module.precision()
 
@@ -49,7 +52,7 @@ class RiemannGP(gpytorch.models.ExactGP):
 
         return NoiseWrapper(self.likelihood.noise, opt)
 
-    def manifold_informed_train(self, lr=1e-1, iter=100, verbose=True):
+    def manifold_informed_train(self, lr=1e-1, iter=100, norm_step_size=10, verbose=True):
         self.train()
         self.likelihood.train()
 
@@ -65,8 +68,16 @@ class RiemannGP(gpytorch.models.ExactGP):
         except:
             self.covar_module.base_kernel.raw_epsilon.requires_grad = True
 
+        # Normalize Operator
+        if hasattr(self.covar_module, 'outputscale'):
+            var_norm = self._normalized_variance(num_rand_vec=100)
+            self.covar_module.outputscale /= var_norm
+
         # Optimizer
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=1e-8)
+
+        # Scheduler
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=1.0)
 
         # Iterations
         for i in range(iter):
@@ -83,16 +94,16 @@ class RiemannGP(gpytorch.models.ExactGP):
             loss_ndim = loss.ndim
             for _, module, prior, closure, _ in self.named_priors():
                 prior_term = prior.log_prob(closure(module))
-                loss.add_(prior_term.view(*prior_term.shape[:loss_ndim], -1).sum(dim=-1))
+                loss.sub_(prior_term.view(*prior_term.shape[:loss_ndim], -1).sum(dim=-1))
 
             # Gradient
             loss.backward()
 
             # Print step information
             if verbose:
-                print(f"Iteration: {i}, Loss: {loss.item():0.3f}, Noise Variance: {self.likelihood.noise.sqrt().item():0.3f}", end='')
+                print(f"Iter: {i}, LR: {scheduler.get_last_lr()[0]:0.3f}, Loss: {loss.item():0.3f}, NoiseVar: {self.likelihood.noise.item():0.3f}", end='')
                 if hasattr(self.covar_module, 'outputscale'):
-                    print(f", Signal Variance: {self.covar_module.outputscale.sqrt().item():0.3f}", end='')
+                    print(f", SignalVar: {self.covar_module.outputscale.item():0.3f}", end='')
                 if hasattr(self.covar_module, 'base_kernel'):
                     print(f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}, Epsilon: {self.covar_module.base_kernel.epsilon.item():0.3f}")
                 else:
@@ -100,6 +111,17 @@ class RiemannGP(gpytorch.models.ExactGP):
 
             # Step
             optimizer.step()
+
+            # # Re-normalize variance
+            # if i % norm_step_size == 0 and i and hasattr(self.covar_module, 'outputscale'):
+            #     self.covar_module.outputscale *= var_norm
+            #     var_norm = self._normalized_variance(num_rand_vec=100)
+            #     self.covar_module.outputscale /= var_norm
+            #     # var_norm = self._normalized_variance(num_rand_vec=100)
+            #     # self.covar_module.outputscale = var_norm.pow(-1)
+
+            # Scheduler
+            scheduler.step()
 
         # Activate optimization mean parameters
         self.mean_module.raw_constant.requires_grad = True
@@ -109,6 +131,22 @@ class RiemannGP(gpytorch.models.ExactGP):
             self.covar_module.raw_epsilon.requires_grad = False
         except:
             self.covar_module.base_kernel.raw_epsilon.requires_grad = False
+
+        # Set signal variance for feature-based kernel
+        if hasattr(self.covar_module, 'outputscale'):
+            self.covar_module.outputscale *= var_norm
+            # self.covar_module.outputscale = self._normalized_variance(num_rand_vec=100, signal_variance=self.covar_module.outputscale)
+
+    def _normalized_variance(self, num_rand_vec=100, signal_variance=None):
+        precision = self.covar_module.base_kernel.precision() if signal_variance is None else ScaleWrapper(signal_variance, self.covar_module.base_kernel.precision())
+        num_points = self.covar_module.base_kernel.nodes.shape[0]
+        rand_idx = torch.randint(0, num_points-1, (1, num_rand_vec))
+        rand_vec = torch.zeros(num_points, num_rand_vec).scatter_(0, rand_idx, 1.0).to(self.covar_module.base_kernel.nodes.device)
+
+        with gpytorch.settings.max_cholesky_size(1):
+            norm_var = precision.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/num_rand_vec
+
+        return norm_var.detach()
 
 
 class ScaleWrapper(LinearOperator):
@@ -144,21 +182,31 @@ class SemiSupervisedWrapper(LinearOperator):
         super(SemiSupervisedWrapper, self).__init__(indices, operator)
 
     def _matmul(self, x):
+        # mask = torch.zeros(self._args[1]._size()[0], dtype=torch.bool).scatter_(0, self._args[0], 1)
+        # labeled = self._args[0]
+        # unlabeled = torch.masked_select(torch.arange(self._args[1]._size()[0]), ~mask)
+
         y = torch.zeros(self._args[1]._size()[0], x.shape[1]).to(x.device)
         y[self._args[0], :] = x
         y = self._args[1]._matmul(y)
 
-        Q_xx = y[self._args[0], :]
+        Qxx_y = y[self._args[0], :]
 
-        y[self._args[0], :] = 0.0
-        y = self._args[1].solve(y)
+        # z = SubBlockOperator(self._args[1], unlabeled, unlabeled).solve(y[unlabeled, :])
+        # z = SubBlockOperator(self._args[1], labeled, unlabeled)._matmul(z)
 
-        not_labaled = torch.ones_like(y)
-        not_labaled[self._args[0], :] = 0.0
-        z = y*not_labaled
-        z = self._args[1]._matmul(z)
+        # y[self._args[0], :] = 0.0
+        # v = torch.rand_like(y)
+        # # y = self._args[1].solve(y)
+        # y = self._args[1].solve(y+v) - self._args[1].solve(v)
 
-        return Q_xx + z[self._args[0], :]
+        # not_labaled = torch.ones_like(y)
+        # not_labaled[self._args[0], :] = 0.0
+        # z = y*not_labaled
+        # z = self._args[1]._matmul(z)
+
+        # return Q_xx - z[self._args[0], :]
+        return Qxx_y  # -z
 
     def _size(self):
         return torch.Size([self._args[0].shape[0], self._args[0].shape[0]])

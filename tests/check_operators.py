@@ -1,6 +1,7 @@
 # !/usr/bin/env python
 # encoding: utf-8
 
+import matplotlib.pyplot as plt
 from time import time
 import math
 
@@ -9,7 +10,8 @@ import torch
 import gpytorch
 
 from importlib.resources import files
-from manifold_gp.utils.generate_truth import groundtruth_from_mesh
+from manifold_gp.utils.mesh_helper import groundtruth_from_samples
+from manifold_gp.utils.file_read import get_data
 
 from manifold_gp.kernels.riemann_matern_kernel import RiemannMaternKernel
 from manifold_gp.models.riemann_gp import RiemannGP, ScaleWrapper, NoiseWrapper, SemiSupervisedWrapper
@@ -20,49 +22,79 @@ import faiss.contrib.torch_utils
 from torch_geometric.utils import coalesce
 from linear_operator import to_linear_operator
 
+from manifold_gp.operators import SubBlockOperator, LaplacianRandomWalkOperator
+
 # Set device
 use_cuda = False  # torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
 # Load mesh and generate ground truth
-data_path = files('manifold_gp.data').joinpath('dragon10k.stl')
-nodes, faces, truth = groundtruth_from_mesh(data_path)
-nodes = torch.from_numpy(nodes).float().to(device)[:400, :]
-truth = torch.from_numpy(truth).float().to(device)[:400]
+data_path = files('manifold_gp.data').joinpath('dumbbell.msh')
+data = get_data(data_path, "Nodes", "Elements")
+
+vertices = data['Nodes'][:, 1:-1]
+edges = data['Elements'][:, -2:].astype(int) - 1
+truth, geodesics = groundtruth_from_samples(vertices, edges)
+
+sampled_x = torch.from_numpy(vertices).float()
+sampled_y = torch.from_numpy(truth).float()
+(m, n) = sampled_x.shape
+
 
 # train
 torch.manual_seed(1337)
-y = truth  # torch.rand(nodes.shape[0])
-semi_idx = torch.randperm(nodes.shape[0])
-labeled = semi_idx[:100]
-not_labeled = semi_idx[100:]
-z = y[labeled]
-x = nodes[labeled, :]
+idx = torch.randperm(sampled_x.shape[0])
+split = 50
+labeled = idx[:split]
+not_labeled = idx[split:]
+
+
+x = sampled_x[labeled, :]
+y = sampled_y[labeled]
+
+z = sampled_x[not_labeled, :]
+u = sampled_y[not_labeled]
 
 # KNN Faiss
-knn = faiss.IndexFlatL2(nodes.shape[1])
+knn = faiss.IndexFlatL2(sampled_x.shape[1])
 
 # Initialize kernel
-neighbors = 5
-modes = 5
-nu = 3
-kernel = gpytorch.kernels.ScaleKernel(RiemannMaternKernel(
-    nu=nu, nodes=nodes, neighbors=neighbors, modes=modes))
+nu = 1
+neighbors = 10
+operator = "randomwalk"
+semisupervised = True
+
+kernel = gpytorch.kernels.ScaleKernel(
+    RiemannMaternKernel(
+        nu=nu,
+        nodes=sampled_x if semisupervised else x,
+        neighbors=neighbors,
+        modes=100,
+        operator=operator
+    )
+)
 likelihood = gpytorch.likelihoods.GaussianLikelihood(
     noise_constraint=gpytorch.constraints.GreaterThan(1e-8))
-# model = RiemannGP(x, z, likelihood, kernel, labeled)
-model = RiemannGP(nodes, truth, likelihood, kernel)
+model = RiemannGP(x, y, likelihood, kernel, labeled if semisupervised else None)
 
-kernel.base_kernel.epsilon = 0.5
-epsilon = kernel.base_kernel.epsilon  # torch.tensor([[0.05]])
+hypers = {
+    'likelihood.noise_covar.noise': torch.tensor(1e-2),
+    'covar_module.base_kernel.epsilon': torch.tensor(0.05),
+    'covar_module.base_kernel.lengthscale': torch.tensor(0.5),
+    'covar_module.outputscale': torch.tensor(1.0),
+    'covar_module.base_kernel.support_kernel.lengthscale': torch.tensor(0.1),
+}
+model.initialize(**hypers)
+
+epsilon = kernel.base_kernel.epsilon
 lengthscale = kernel.base_kernel.lengthscale
 outputscale = kernel.outputscale
-likelihood.noise = 1e-5
 noise = likelihood.noise
+
 knn.reset()
-knn.train(nodes)
-knn.add(nodes)
-val, idx = knn.search(nodes, neighbors+1)
+knn.train(kernel.base_kernel.nodes)
+knn.add(kernel.base_kernel.nodes)
+val, idx = knn.search(kernel.base_kernel.nodes, neighbors+1)
 val = val[:, 1:]
 idx = idx[:, 1:]
 
@@ -82,7 +114,7 @@ def symmetric(idx, val):
     rows = idx[0, :]
     cols = idx[1, :]
 
-    val = val.div(-2*epsilon.square()).exp().squeeze()
+    val = val.div(-4*epsilon.square()).exp().squeeze()
 
     Lsparse = torch.sparse_coo_tensor(idx, val, (dim, dim))
     L = (Lsparse.to_dense() + Lsparse.to_dense().t())
@@ -94,7 +126,7 @@ def symmetric(idx, val):
     # L = torch.mm(D, L)
     # L *= D.unsqueeze(-1)
 
-    return torch.eye(dim)-L
+    return (torch.eye(dim)-L)/epsilon.square()
 
 
 def randomwalk(idx, val):
@@ -112,7 +144,7 @@ def randomwalk(idx, val):
     rows = idx[0, :]
     cols = idx[1, :]
 
-    val = val.div(-2*epsilon.square()).exp().squeeze()
+    val = val.div(-4*epsilon.square()).exp().squeeze()
 
     Lsparse = torch.sparse_coo_tensor(idx, val, (dim, dim))
     L = (Lsparse.to_dense() + Lsparse.to_dense().t())
@@ -124,7 +156,7 @@ def randomwalk(idx, val):
     # L = torch.mm(D, L)
     # L *= D.unsqueeze(-1)
 
-    return torch.eye(dim)-L, D
+    return (torch.eye(dim)-L)/epsilon.square(), D
 
 
 def print_mat(mat):
@@ -135,74 +167,55 @@ def print_mat(mat):
     print('\n'.join(table))
 
 
-# Symmetric Laplacian
-Ls = symmetric(idx, val)
+if operator == 'symmetric':
+    Ls = symmetric(idx, val)
+    Br = torch.eye(kernel.base_kernel.nodes.shape[0])*2*nu/lengthscale.square().squeeze() + Ls
+    Pr = Br
+    if nu > 1:
+        for _ in range(1, nu):
+            Pr = torch.mm(Pr, Br)
+    # Pr = torch.mm(Pr, torch.mm(Pr, Pr))
+elif operator == 'randomwalk':
+    Lr, D = randomwalk(idx, val)
+    Br = torch.eye(kernel.base_kernel.nodes.shape[0])*2*nu/lengthscale.square().squeeze() + Lr
+    Pr = Br
+    if nu > 1:
+        for _ in range(1, nu):
+            Pr = torch.mm(Pr, Br)
+    Pr = torch.mm(Pr, D.pow(-1).diag())
+    # Pr = torch.mm(torch.mm(Pr, torch.mm(Pr, Pr)), D.pow(-1).diag())
 
-# mv = torch.mv(Ls, y)
-# mv_solve = torch.linalg.solve(Ls, y)
+# Semisupervised
+if semisupervised:
+    Qxx = Pr[:, labeled]
+    Qxx = Qxx[labeled, :]
+    Qxz = Pr[:, not_labeled]
+    Qxz = Qxz[labeled, :]
+    Qzz = Pr[:, not_labeled]
+    Qzz = Qzz[not_labeled, :]
+    Qzx = Pr[:, labeled]
+    Qzx = Qzx[not_labeled, :]
+    Pr = Qxx - torch.mm(Qxz, torch.linalg.solve(Qzz, Qzx))
 
-# Random Walk Laplacian
-Lr, D = randomwalk(idx, val)
-
-# mv = torch.mv(Lr, y)
-# mv_solve = torch.linalg.solve(Lr, y)
-
-# Precision Symmetric
-Ps = torch.eye(nodes.shape[0])*2*nu/lengthscale.square().squeeze() + Ls
-Ps = torch.mm(Ps, torch.mm(Ps, Ps))
-
-# mv = torch.mv(Ps, y)
-# mv_solve = torch.linalg.solve(Ps y)
-
-# Precision Random Walk
-Pr = torch.eye(nodes.shape[0])*2*nu/lengthscale.square().squeeze() + Lr
-# Dg = D.detach()
-Pr = torch.mm(torch.mm(Pr, torch.mm(Pr, Pr)), D.pow(-1).diag())
-# Pr = torch.mm(Pr, torch.mm(Pr, Pr))
+# Outputscale
 Pr /= outputscale
-Qxx = Pr[:, labeled]
-Qxx = Qxx[labeled, :]
 
-Qxz = Pr[:, not_labeled]
-Qxz = Qxz[labeled, :]
-
-Qzz = Pr[:, not_labeled]
-Qzz = Qzz[not_labeled, :]
-
-Qzx = Pr[:, labeled]
-Qzx = Qzx[not_labeled, :]
-
-# Pr = Qxx - torch.mm(Qxz, torch.linalg.solve(Qzz, Qzx))
+# Noise
 Pr = Pr - noise*torch.mm(Pr, Pr) + noise.square()*torch.mm(Pr, torch.mm(Pr, Pr))
 
-mv = torch.mv(Pr, y)
-# mv = torch.mv(Pr, z)
-
-# mv_solve = torch.linalg.solve(Pr, y)
-
-# opt = kernel.base_kernel.laplacian(operator='randomwalk')
+mv_mul = torch.mv(Pr, y)
+mv_solve = torch.linalg.solve(Pr, y)
 
 opt = model.noise_precision()
-# opt = NoiseWrapper(noise, ScaleWrapper(outputscale, SemiSupervisedWrapper(labeled, kernel.base_kernel.precision())))
-# opt = NoiseWrapper(noise, ScaleWrapper(outputscale, kernel.base_kernel.precision()))
 
-# mv_opt = opt.matmul(z.view(-1, 1)).squeeze()
-mv_opt = opt.matmul(y.view(-1, 1)).squeeze()
+opt_mul = opt.matmul(y.view(-1, 1)).squeeze()
+# opt_solve = opt.solve(y.view(-1, 1)).squeeze()
 
-# mv_solve_opt = opt.solve(y.view(-1, 1)).squeeze()
+# loss = 0.5 * sum([torch.dot(y, mv_mul), -torch.logdet(Pr), y.size(-1) * math.log(2 * math.pi)])
 
+with gpytorch.settings.max_cholesky_size(100):
+    loss = 0.5 * sum([torch.dot(y, opt.matmul(y.unsqueeze(-1)).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
 
-# with gpytorch.settings.max_cholesky_size(300):
-#     loss = opt.inv_quad_logdet(logdet=True)[1]  # mv_opt.sum()
-
-# loss = 0.5 * sum([torch.dot(z, mv), -torch.logdet(Pr), z.size(-1) * math.log(2 * math.pi)])  # mv.sum()
-loss = 0.5 * sum([torch.dot(y, mv), -torch.logdet(Pr), y.size(-1) * math.log(2 * math.pi)])  # mv.sum()
-
-# with gpytorch.settings.max_cholesky_size(300):
-# loss = 0.5 * sum([torch.dot(z, opt.matmul(z.unsqueeze(-1)).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], z.size(-1) * math.log(2 * math.pi)])
-# loss = 0.5 * sum([torch.dot(y, opt.matmul(y.unsqueeze(-1)).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
-
-# D.retain_grad()
 loss.backward()
 
 print(loss)
@@ -212,6 +225,29 @@ print(kernel.raw_outputscale.grad)
 print(likelihood.raw_noise.grad)
 
 
-# with gpytorch.settings.max_cholesky_size(300):
-#     loss = opt.inv_quad_logdet(logdet=True)[1]
-# loss.backward()
+# tmp = kernel.base_kernel.laplacian(operator='randomwalk')
+# lap = LaplacianRandomWalkOperator(tmp._args[0], tmp._args[1], tmp._args[3], tmp._args[2], kernel.base_kernel.nodes.shape[0], kernel.base_kernel)
+# lap11 = SubBlockOperator(lap, labeled, labeled)
+# lap12 = SubBlockOperator(lap, labeled, not_labeled)
+# lap22 = SubBlockOperator(lap, not_labeled, not_labeled)
+
+# Lxx = Lr[:, labeled]
+# Lxx = Lxx[labeled, :]
+# Lxz = Lr[:, not_labeled]
+# Lxz = Lxz[labeled, :]
+# Lzz = Lr[:, not_labeled]
+# Lzz = Lzz[not_labeled, :]
+# Lzx = Lr[:, labeled]
+# Lzx = Lzx[not_labeled, :]
+
+# def recursive_operation(A, B, C, n):  # n>=2
+#     X, Y, Z = matrix_power(A, B, C)
+
+#     if n > 2:
+#         X, Y, Z = recursive_operation(X, Y, Z, n-1)
+
+#     return X, Y, Z
+
+
+# def matrix_power(A, B, C, X, Y, Z):
+#     return (torch.mm(A, X) + torch.mm(B, Y.T), torch.mm(A, Y) + torch.mm(B, Z), torch.mm(B.T, Y) + torch.mm(C, Z))
