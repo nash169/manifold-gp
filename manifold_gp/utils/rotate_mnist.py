@@ -56,9 +56,9 @@ class RotatedMNIST():
         train_x = train_x.reshape([rows*(cols+1), -1])
 
         if save:
-            np.savetxt('manifold_gp/data/mnist_x_train.csv', train_x)
-            np.savetxt('manifold_gp/data/mnist_y_train.csv', train_y)
-            np.savetxt('manifold_gp/data/mnist_label_train.csv', train_labels)
+            np.savetxt('benchmarks/datasets/mnist_x_train.csv', train_x)
+            np.savetxt('benchmarks/datasets/mnist_y_train.csv', train_y)
+            np.savetxt('benchmarks/datasets/mnist_label_train.csv', train_labels)
 
         return train_x, train_y, train_labels
 
@@ -104,9 +104,9 @@ class RotatedMNIST():
         test_x = test_x.reshape([rows*(cols+1), -1])
 
         if save:
-            np.savetxt('manifold_gp/data/mnist_x_test.csv', test_x)
-            np.savetxt('manifold_gp/data/mnist_y_test.csv', test_y)
-            np.savetxt('manifold_gp/data/mnist_label_test.csv', test_labels)
+            np.savetxt('benchmarks/datasets/mnist_x_test.csv', test_x)
+            np.savetxt('benchmarks/datasets/mnist_y_test.csv', test_y)
+            np.savetxt('benchmarks/datasets/mnist_label_test.csv', test_labels)
 
         return test_x, test_y, test_labels
 

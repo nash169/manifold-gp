@@ -7,23 +7,34 @@ from manifold_gp.utils.rotate_mnist import RotatedMNIST
 from numpy.random import default_rng
 
 obj = RotatedMNIST()
-train_x, train_y, train_labels = obj.generate_trainset(100, 50, True)
-test_x, test_y, test_labels = obj.generate_testset(100, 20, True)
+train_x, train_y, train_labels = obj.generate_trainset(20, 0, save=False)
+# test_x, test_y, test_labels = obj.generate_testset(100, 20, save=True)
 
-rng = default_rng()
-sample = rng.choice(train_x.shape[0], size=12, replace=False)
-# sample = range(12)
-count = 1
+# rng = default_rng()
+# sample = rng.choice(train_x.shape[0], size=12, replace=False)
 
-fig = plt.figure()
-fig.subplots_adjust(wspace=1.2)
-for i in sample:
-    ax = fig.add_subplot(3, 4, count)
-    ax.imshow(obj.rescale(train_x[i, :].reshape(28, 28)), cmap='gray')
-    ax.set_title(
-        'Label: ' + str(train_labels[i]) + ' Truth: ' + str(train_y[i]), fontsize=10)
-    count += 1
-plt.show()
+# 5, 0, 4, 9, 2, 3, 1,  7,  8,  6
+# 0, 1, 2, 4, 5, 7, 8, 15, 17, 18
+idx = [0, 1, 2, 4, 5, 7, 8, 15, 17, 18]
+train_x = train_x[idx]
+train_y = train_y[idx]
+train_labels = train_labels[idx]
+
+train_x, train_y, train_labels = obj.generate_trainset(train_x.shape[0], 1000, dataset=(train_x.reshape(-1, 28, 28), train_labels), save=False)
+data = np.concatenate((train_labels[:, np.newaxis], train_y[:, np.newaxis], train_x), axis=1)
+np.savetxt('benchmarks/datasets/mnist.csv', data)
+
+# fig = plt.figure()
+# fig.subplots_adjust(wspace=1.2)
+# count = 1
+# sample = range(train_x.shape[0])
+# for i in sample:
+#     ax = fig.add_subplot(4, 5, count)
+#     ax.imshow(obj.rescale(train_x[i, :].reshape(28, 28)), cmap='gray')
+#     ax.set_title(
+#         'Label: ' + str(train_labels[i]) + ' Truth: ' + str(train_y[i]), fontsize=10)
+#     count += 1
+# plt.show()
 
 # response = requests.get(
 #     'http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz')

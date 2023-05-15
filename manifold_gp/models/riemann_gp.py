@@ -52,7 +52,7 @@ class RiemannGP(gpytorch.models.ExactGP):
 
         return NoiseWrapper(self.likelihood.noise, opt)
 
-    def manifold_informed_train(self, lr=1e-1, iter=100, norm_step_size=10, verbose=True):
+    def manifold_informed_train(self, lr=1e-1, iter=100, norm_step_size=10, num_rand_vec=100, verbose=True):
         self.train()
         self.likelihood.train()
 
@@ -70,7 +70,7 @@ class RiemannGP(gpytorch.models.ExactGP):
 
         # Normalize Operator
         if hasattr(self.covar_module, 'outputscale'):
-            var_norm = self._normalized_variance(num_rand_vec=100)
+            var_norm = self._normalized_variance(num_rand_vec=num_rand_vec)
             self.covar_module.outputscale /= var_norm
 
         # Optimizer
@@ -115,9 +115,9 @@ class RiemannGP(gpytorch.models.ExactGP):
             # # Re-normalize variance
             # if i % norm_step_size == 0 and i and hasattr(self.covar_module, 'outputscale'):
             #     self.covar_module.outputscale *= var_norm
-            #     var_norm = self._normalized_variance(num_rand_vec=100)
+            #     var_norm = self._normalized_variance(num_rand_vec=num_rand_vec)
             #     self.covar_module.outputscale /= var_norm
-            #     # var_norm = self._normalized_variance(num_rand_vec=100)
+            #     # var_norm = self._normalized_variance(num_rand_vec=num_rand_vec)
             #     # self.covar_module.outputscale = var_norm.pow(-1)
 
             # Scheduler
@@ -135,7 +135,7 @@ class RiemannGP(gpytorch.models.ExactGP):
         # Set signal variance for feature-based kernel
         if hasattr(self.covar_module, 'outputscale'):
             self.covar_module.outputscale *= var_norm
-            # self.covar_module.outputscale = self._normalized_variance(num_rand_vec=100, signal_variance=self.covar_module.outputscale)
+            # self.covar_module.outputscale = self._normalized_variance(num_rand_vec=num_rand_vec, signal_variance=self.covar_module.outputscale)
 
     def _normalized_variance(self, num_rand_vec=100, signal_variance=None):
         precision = self.covar_module.base_kernel.precision() if signal_variance is None else ScaleWrapper(signal_variance, self.covar_module.base_kernel.precision())
