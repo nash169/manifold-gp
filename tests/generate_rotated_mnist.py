@@ -7,7 +7,7 @@ from manifold_gp.utils.rotate_mnist import RotatedMNIST
 from numpy.random import default_rng
 
 obj = RotatedMNIST()
-train_x, train_y, train_labels = obj.generate_trainset(20, 0, save=False)
+digits, _, digits_label = obj.generate_trainset(20, 0, save=False)
 # test_x, test_y, test_labels = obj.generate_testset(100, 20, save=True)
 
 # rng = default_rng()
@@ -16,13 +16,22 @@ train_x, train_y, train_labels = obj.generate_trainset(20, 0, save=False)
 # 5, 0, 4, 9, 2, 3, 1,  7,  8,  6
 # 0, 1, 2, 4, 5, 7, 8, 15, 17, 18
 idx = [0, 1, 2, 4, 5, 7, 8, 15, 17, 18]
-train_x = train_x[idx]
-train_y = train_y[idx]
-train_labels = train_labels[idx]
+digits = digits[idx]
+digits_label = digits_label[idx]
 
-train_x, train_y, train_labels = obj.generate_trainset(train_x.shape[0], 1000, dataset=(train_x.reshape(-1, 28, 28), train_labels), save=False)
-data = np.concatenate((train_labels[:, np.newaxis], train_y[:, np.newaxis], train_x), axis=1)
-np.savetxt('benchmarks/datasets/mnist.csv', data)
+train_x, train_y, train_labels = obj.generate_trainset(digits.shape[0], 1000, dataset=(digits.reshape(-1, 28, 28), digits_label), save=False)
+test_x, test_y, test_labels = obj.generate_trainset(digits.shape[0], 100, dataset=(digits.reshape(-1, 28, 28), digits_label), save=False)
+np.savetxt('benchmarks/datasets/mnist_train.csv', np.concatenate((train_labels[:, np.newaxis], train_y[:, np.newaxis], train_x), axis=1))
+np.savetxt('benchmarks/datasets/mnist_test.csv', np.concatenate((test_labels[:, np.newaxis], test_y[:, np.newaxis], test_x), axis=1))
+
+
+# # generate full mnist dataset
+# obj = RotatedMNIST()
+# train_x, train_y, train_labels = obj.generate_trainset(1000, 100, save=False)
+# test_x, test_y, test_labels = obj.generate_testset(100, 100, save=False)
+# np.savetxt('benchmarks/datasets/mnist_train.csv', np.concatenate((train_labels[:, np.newaxis], train_y[:, np.newaxis], train_x), axis=1))
+# np.savetxt('benchmarks/datasets/mnist_test.csv', np.concatenate((test_labels[:, np.newaxis], test_y[:, np.newaxis], test_x), axis=1))
+
 
 # fig = plt.figure()
 # fig.subplots_adjust(wspace=1.2)
