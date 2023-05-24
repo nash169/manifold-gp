@@ -44,7 +44,7 @@ sampled_y = torch.from_numpy(truth).float()
 # train
 torch.manual_seed(1337)
 idx = torch.randperm(sampled_x.shape[0])
-split = 50
+split = m
 labeled = idx[:split]
 not_labeled = idx[split:]
 
@@ -62,15 +62,17 @@ knn = faiss.IndexFlatL2(sampled_x.shape[1])
 nu = 1
 neighbors = 10
 operator = "randomwalk"
-semisupervised = True
+semisupervised = False
 
 kernel = gpytorch.kernels.ScaleKernel(
     RiemannMaternKernel(
         nu=nu,
         nodes=sampled_x if semisupervised else x,
         neighbors=neighbors,
+        operator=operator,
         modes=100,
-        operator=operator
+        ball_scale=3.0,
+        prior_bandwidth=False,
     )
 )
 likelihood = gpytorch.likelihoods.GaussianLikelihood(
@@ -79,10 +81,9 @@ model = RiemannGP(x, y, likelihood, kernel, labeled if semisupervised else None)
 
 hypers = {
     'likelihood.noise_covar.noise': torch.tensor(1e-2),
-    'covar_module.base_kernel.epsilon': torch.tensor(0.05),
-    'covar_module.base_kernel.lengthscale': torch.tensor(0.5),
+    'covar_module.base_kernel.epsilon': torch.tensor(0.5),
+    'covar_module.base_kernel.lengthscale': torch.tensor(10.0),
     'covar_module.outputscale': torch.tensor(1.0),
-    'covar_module.base_kernel.support_kernel.lengthscale': torch.tensor(0.1),
 }
 model.initialize(**hypers)
 
@@ -177,13 +178,8 @@ if operator == 'symmetric':
     # Pr = torch.mm(Pr, torch.mm(Pr, Pr))
 elif operator == 'randomwalk':
     Lr, D = randomwalk(idx, val)
-    Br = torch.eye(kernel.base_kernel.nodes.shape[0])*2*nu/lengthscale.square().squeeze() + Lr
-    Pr = Br
-    if nu > 1:
-        for _ in range(1, nu):
-            Pr = torch.mm(Pr, Br)
-    Pr = torch.mm(Pr, D.pow(-1).diag())
-    # Pr = torch.mm(torch.mm(Pr, torch.mm(Pr, Pr)), D.pow(-1).diag())
+    Pr = torch.matrix_power(torch.eye(kernel.base_kernel.nodes.shape[0])*2*nu/lengthscale.square().squeeze() + Lr, nu)
+    Pr = torch.mm(D.diag(), Pr)
 
 # Semisupervised
 if semisupervised:
@@ -197,32 +193,50 @@ if semisupervised:
     Qzx = Qzx[not_labeled, :]
     Pr = Qxx - torch.mm(Qxz, torch.linalg.solve(Qzz, Qzx))
 
-# Outputscale
-Pr /= outputscale
+evals, evecs = torch.linalg.eigh(symmetric(idx, val))
+evecs = torch.mm(D.pow(-0.5).diag(), evecs)
+spectral = (2*nu/lengthscale.square() + evals).pow(-nu)
+p1 = torch.mm(spectral*evecs, evecs.T)
 
-# Noise
-Pr = Pr - noise*torch.mm(Pr, Pr) + noise.square()*torch.mm(Pr, torch.mm(Pr, Pr))
+# evals, evecs = torch.linalg.eig(Lr)
+# evals = torch.real(evals)
+# evecs = torch.real(evecs)
+# spectral = (2*nu/lengthscale.square() + evals).pow(nu)
+# p2 = torch.mm(spectral*evecs, evecs.T)
 
-mv_mul = torch.mv(Pr, y)
-mv_solve = torch.linalg.solve(Pr, y)
 
-opt = model.noise_precision()
+print_mat(p1[:10, :10].detach().numpy())
+print(" ")
+# print_mat(p2[:10, :10].detach().numpy())
+# print(" ")
+print_mat(torch.linalg.inv(Pr)[:10, :10].detach().numpy())
+# print_mat(Pr[:10, :10].detach().numpy())
+# # Outputscale
+# Pr /= outputscale
 
-opt_mul = opt.matmul(y.view(-1, 1)).squeeze()
-# opt_solve = opt.solve(y.view(-1, 1)).squeeze()
+# # Noise
+# Pr = Pr - noise*torch.mm(Pr, Pr) + noise.square()*torch.mm(Pr, torch.mm(Pr, Pr))
 
-# loss = 0.5 * sum([torch.dot(y, mv_mul), -torch.logdet(Pr), y.size(-1) * math.log(2 * math.pi)])
+# mv_mul = torch.mv(Pr, y)
+# mv_solve = torch.linalg.solve(Pr, y)
 
-with gpytorch.settings.max_cholesky_size(100):
-    loss = 0.5 * sum([torch.dot(y, opt.matmul(y.unsqueeze(-1)).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
+# opt = model.noise_precision()
 
-loss.backward()
+# opt_mul = opt.matmul(y.view(-1, 1)).squeeze()
+# # opt_solve = opt.solve(y.view(-1, 1)).squeeze()
 
-print(loss)
-print(kernel.base_kernel.raw_epsilon.grad)
-print(kernel.base_kernel.raw_lengthscale.grad)
-print(kernel.raw_outputscale.grad)
-print(likelihood.raw_noise.grad)
+# # loss = 0.5 * sum([torch.dot(y, mv_mul), -torch.logdet(Pr), y.size(-1) * math.log(2 * math.pi)])
+
+# with gpytorch.settings.max_cholesky_size(100):
+#     loss = 0.5 * sum([torch.dot(y, opt.matmul(y.unsqueeze(-1)).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
+
+# loss.backward()
+
+# print(loss)
+# print(kernel.base_kernel.raw_epsilon.grad)
+# print(kernel.base_kernel.raw_lengthscale.grad)
+# print(kernel.raw_outputscale.grad)
+# print(likelihood.raw_noise.grad)
 
 
 # tmp = kernel.base_kernel.laplacian(operator='randomwalk')

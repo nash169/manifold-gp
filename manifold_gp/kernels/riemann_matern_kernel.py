@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 import torch
+import gpytorch
 
 from .riemann_kernel import RiemannKernel, LaplacianRandomWalk
 
@@ -45,16 +46,16 @@ class PrecisionMatern(LinearOperator):
     #     return res
 
     def _matmul(self, x):
-        if self._args[2].__class__.__name__ == "LaplacianRandomWalk":
-            res = x.mul(self._args[2]._args[1].view(-1, 1))
-        else:
-            res = x
+        res = x
 
         diagonal_term = self._args[1].square().squeeze() / (2*self._args[0])
 
         for _ in range(self._args[0].int()):
             res = res + diagonal_term * self._args[2]._matmul(res)
             res /= diagonal_term
+
+        if self._args[2].__class__.__name__ == "LaplacianRandomWalk":
+            res.mul_(self._args[2]._args[1].pow(-1).view(-1, 1))
 
         return res  # * diagonal_term.pow(-self._args[0])
 
@@ -75,6 +76,20 @@ class PrecisionMatern(LinearOperator):
     #         res.mul_(self._args[2]._args[1].pow(-1).view(-1, 1))
 
     #     return res
+
+    def _average_variance(self, num_rand_vec=None):
+        if num_rand_vec is not None:
+            num_points = self._size()[0]
+            rand_idx = torch.randint(0, num_points-1, (1, num_rand_vec))
+            rand_vec = torch.zeros(num_points, num_rand_vec).scatter_(0, rand_idx, 1.0).to(self._args[1].device)
+        else:
+            num_rand_vec = self._size()[0]
+            rand_vec = torch.eye(self._size()[0]).to(self._args[1].device)
+
+        with gpytorch.settings.max_cholesky_size(1):
+            norm_var = self.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/num_rand_vec
+
+        return norm_var
 
     def _size(self):
         return self._args[2]._size()

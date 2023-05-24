@@ -10,9 +10,9 @@ class SchurComplementOperator(LinearOperator):
     def __init__(self, operator, indices):
         super(SchurComplementOperator, self).__init__(operator, indices=indices)
 
-        mask = torch.zeros(self._args[0]._size()[0], dtype=torch.bool).scatter_(0, self._kwargs['indices'], 1)
+        mask = torch.zeros(self._args[0]._size()[0], dtype=torch.bool).to(self._kwargs['indices'].device).scatter_(0, self._kwargs['indices'], 1)
         self.labeled = self._kwargs['indices']
-        self.unlabeled = torch.masked_select(torch.arange(self._args[0]._size()[0]), ~mask)
+        self.unlabeled = torch.masked_select(torch.arange(self._args[0]._size()[0]).to(self._kwargs['indices'].device), ~mask)
 
     def _matmul(self, x):
         y = torch.zeros(self._args[0]._size()[0], x.shape[1]).to(x.device)

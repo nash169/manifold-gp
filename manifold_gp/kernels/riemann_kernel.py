@@ -30,8 +30,7 @@ class RiemannKernel(gpytorch.kernels.Kernel):
                  operator: Optional[str] = "randomwalk",
                  modes: Optional[int] = 10,
                  ball_scale: Optional[float] = 1.0,
-                 support_kernel: Optional[gpytorch.kernels.Kernel] = gpytorch.kernels.RBFKernel(),
-                 epsilon_prior: Optional[gpytorch.priors.Prior] = None,
+                 prior_bandwidth: Optional[bool] = False,
                  **kwargs):
         super(RiemannKernel, self).__init__(**kwargs)
 
@@ -39,19 +38,14 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         self.nodes = nodes.unsqueeze(-1) if nodes.ndimension() == 1 else nodes
         self.neighbors = neighbors
         self.operator = operator
-        self.modes = 2*modes
+        self.modes = modes
         self.ball_scale = ball_scale
-        self.support_kernel = support_kernel
-
-        self.base_feature = gpytorch.kernels.RFFKernel(modes)
-        self.base_feature._init_weights(self.nodes.size(-1), self.base_feature.num_samples)
+        self.prior_bandwidth = prior_bandwidth
 
         # KNN Faiss
         if self.nodes.is_cuda:
             res = faiss.StandardGpuResources()
             self.knn = faiss.GpuIndexIVFFlat(res, self.nodes.shape[1], 1, faiss.METRIC_L2)
-            # res = faiss.StandardGpuResources()
-            # self.knn = faiss.GpuIndexFlatL2(res, self.nodes.shape[1])
         else:
             self.knn = faiss.IndexFlatL2(self.nodes.shape[1])
 
@@ -63,20 +57,10 @@ class RiemannKernel(gpytorch.kernels.Kernel):
             name='raw_epsilon', parameter=torch.nn.Parameter(torch.zeros(*self.batch_shape, 1, 1).to(nodes.device), requires_grad=True)
         )
 
-        if epsilon_prior is not None:
-            if not isinstance(epsilon_prior, gpytorch.priors.Prior):
-                raise TypeError("Expected gpytorch.priors.Prior but got " + type(epsilon_prior).__name__)
+        if prior_bandwidth:
             self.register_prior(
-                "epsilon_prior", epsilon_prior, self._epsilon_param, self._epsilon_closure
+                "epsilon_prior", gpytorch.priors.GammaPrior(self.eps_concentration, self.eps_rate), self._epsilon_param, self._epsilon_closure
             )
-
-        # self.register_prior(
-        #     "epsilon_prior", InverseGammaPrior(self.eps_concentration, self.eps_rate), self._epsilon_param, self._epsilon_closure
-        # )
-
-        # self.register_prior(
-        #     "epsilon_prior", gpytorch.priors.GammaPrior(self.eps_concentration, self.eps_rate), self._epsilon_param, self._epsilon_closure
-        # )
 
         # self.register_constraint("raw_epsilon", GreaterThan(self.eps_gte))
         self.register_constraint("raw_epsilon", Positive())
@@ -84,33 +68,6 @@ class RiemannKernel(gpytorch.kernels.Kernel):
     @abstractmethod
     def spectral_density(self):
         raise NotImplementedError()
-
-    # def base(self, x1, x2, diag=False):
-    #     if diag:
-    #         if torch.equal(x1, x2):
-    #             return torch.sum(self.spectral_density().T*self.eigenfunctions(x1).pow(2), dim=0)
-    #         else:
-    #             return torch.sum(self.spectral_density().T*self.eigenfunctions(x1)*self.eigenfunctions(x2), dim=0)
-    #     else:
-    #         return torch.mm(self.eigenfunctions(x1).T, self.spectral_density().T*self.eigenfunctions(x2))
-
-    # def forward(self, x1, x2, diag=False, **params):
-    #     if diag:
-    #         if torch.equal(x1, x2):
-    #             return self.variance(x1)
-    #         else:
-    #             return self.base(x1, x2, diag=True) + self.support_kernel.forward(x1, x2, diag=True)*torch.sqrt(self.variance(x1) - self.base(x1, x1, diag=True))*torch.sqrt(self.variance(x2) - self.base(x2, x2, diag=True))
-    #     else:
-    #         return self.base(x1, x2) + self.support_kernel.forward(x1, x2)*torch.outer(torch.sqrt(self.variance(x1) - self.base(x1, x1, diag=True)), torch.sqrt(self.variance(x2) - self.base(x2, x2, diag=True)))
-
-    # def temp_forward(self, x1, x2, diag=False, **params):
-    #     if diag:
-    #         if torch.equal(x1, x2):
-    #             return torch.sum(self.features(x1).pow(2), dim=0)
-    #         else:
-    #             return torch.sum(self.features(x1)*self.features(x2), dim=0)
-    #     else:
-    #         return torch.mm(self.features(x1), self.features(x2).T)
 
     def forward(self, x1: Tensor, x2: Tensor, diag: bool = False, last_dim_is_batch: bool = False, **kwargs) -> Tensor:
         if last_dim_is_batch:
@@ -124,17 +81,16 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         else:
             z2 = z1
 
-        D = 1  # float(self.modes)
         if diag:
-            return (z1 * z2).sum(-1) / D
+            return (z1 * z2).sum(-1)
         if x1_eq_x2:
             # Exploit low rank structure, if there are fewer features than data points
             if z1.size(-1) < z2.size(-2):
-                return LowRankRootLinearOperator(z1 / math.sqrt(D))
+                return LowRankRootLinearOperator(z1)
             else:
-                return RootLinearOperator(z1 / math.sqrt(D))
+                return RootLinearOperator(z1)
         else:
-            return MatmulLinearOperator(z1 / D, z2.transpose(-1, -2))
+            return MatmulLinearOperator(z1, z2.transpose(-1, -2))
 
     @property
     def epsilon(self):
@@ -163,11 +119,18 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         self.knn.add(self.nodes)
         val, idx = self.knn.search(self.nodes, self.neighbors+1)
 
-        # Calculate epsilon lower constraint
-        min_weight = torch.tensor(1e-4).to(self.nodes.device)
-        self.eps_gte = val[:, 1].max().div(-2*min_weight.log()).sqrt()
+        # Calculate epsilon lower bound (99% kernel decay)
+        min_keval = torch.tensor(1e-3).to(self.nodes.device)
+        self.eps_gte = val[:, 1].max().div(-4*min_keval.log()).sqrt()
 
-        # Symmetric KNN
+        # Gamma distribution hyperparameters
+        if self.prior_bandwidth:
+            p_50 = val[:, 1:].sqrt().mean(dim=1).sort()[0][int(round(val.shape[0]*0.50))]
+            k_std = 4*p_50/(p_50-self.eps_gte)**2
+            self.eps_rate = k_std
+            self.eps_concentration = k_std * p_50 + 1
+
+        # Make KNN Symmetric
         rows = torch.arange(idx.shape[0]).repeat_interleave(
             idx.shape[1]-1).to(self.nodes.device)
         cols = idx[:, 1:].reshape(1, -1).squeeze()
@@ -178,14 +141,6 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         idx = torch.stack([rows, cols], dim=0)
         val = torch.cat([val[split], val[~split]])
         self.indices, self.values = coalesce(idx, val, reduce='mean')
-
-        # # Calculate epsilon prior parameter (Inverse Gamma)
-        # self.eps_concentration = self.values.sqrt().std().pow(-1)*100.0
-        # self.eps_rate = (self.eps_concentration+1)*self.values.sort()[0][int(self.values.shape[0]*0.99)].sqrt()
-
-        # # Gamma distribution
-        # self.eps_concentration = 100.0*self.values.sqrt().std().pow(-1) * self.values.sort()[0][int(self.values.shape[0]*0.99)].sqrt() + 1
-        # self.eps_rate = 100.0*self.values.sqrt().std().pow(-1)
 
     def laplacian(self, operator):
         if operator == 'symmetric':
@@ -231,39 +186,6 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         else:
             print("Operator not implemented.")
 
-    # def eigenfunctions(self, x):
-    #     distances, indices = self.knn.search(x, self.neighbors+1)  # self.neighbors or fix it
-    #     # distances[distances > self.epsilon.square()] = 0
-    #     # return torch.sum(self.eigenvectors[indices].permute(2, 0, 1) * distances.div(-2*self.epsilon.square()).exp(), dim=2)
-    #     return self.inverse_distance_weighting(distances, self.eigenvectors[indices].permute(2, 0, 1))
-
-    # def features(self, x: Tensor, normalize: bool = False, c: float = 1.0) -> Tensor:
-    #     # features weights
-    #     weights = (self.spectral_density() / self.normalization).sqrt()
-
-    #     if torch.equal(x, self.nodes):
-    #         return weights * self.eigenvectors
-    #     else:
-    #         z = weights * self.laplace_features(x)  # * math.sqrt(self.nodes.shape[0])
-    #         # test_idx, train_idx = radius(self.nodes, x, c*self.epsilon, max_num_neighbors=self.nodes.shape[0])
-
-    #         # # if not train point inside r-ball of query points return rff
-    #         # if test_idx.numel() == 0:
-    #         #     # return self.base_feature._featurize(x, normalize)
-    #         #     return weights * self.eigenvectors.mean(dim=0).repeat(x.shape[0], 1)
-
-    #         # # calculate laplace features
-    #         # else:
-    #         #     z = weights * self.inverse_distance_weighting(x, self.eigenvectors, train_idx, test_idx)  # * math.sqrt(self.nodes.shape[0])
-
-    #         #     laplace_idx = (torch.arange(x.size(0)).to(self.nodes.device).unsqueeze(-1) == torch.unique(test_idx)).any(1)
-    #         #     # base_idx = torch.arange(x.size(0)).to(self.nodes.device) != torch.unique(test_idx)
-
-    #         #     # z[~laplace_idx] = self.base_feature._featurize(x[~laplace_idx], normalize)
-    #         #     z[~laplace_idx] = weights * self.eigenvectors.mean(dim=0).unsqueeze(0)
-
-    #         return z
-
     def features(self, x: Tensor, normalize: bool = False, c: float = 1.0) -> Tensor:
         # features weights
         weights = (self.spectral_density() / self.normalization).sqrt()
@@ -305,89 +227,6 @@ class RiemannKernel(gpytorch.kernels.Kernel):
 
             return features
 
-    # def eigenfunctions(self, x, c=1.0):
-    #     # test_idx, train_idx = radius(self.nodes, x, c*self.epsilon)
-    #     # if test_idx.numel() == 0:
-    #     #     return torch.zeros(self.modes, x.shape[0])
-
-    #     # val = (x[test_idx, :] - self.nodes[train_idx, :]).square().sum(dim=1).pow(-1)
-    #     # norm = torch.zeros(x.shape[0]).to(self.nodes.device).scatter_add_(0, test_idx, val)
-    #     # weigths = torch.zeros(x.shape[0], self.modes).to(self.nodes.device).index_add_(0, test_idx, self.eigenvectors[train_idx, :]*val.view(-1, 1))
-    #     # nz_idx = norm >= 1e-6
-    #     # weigths[nz_idx] /= norm[nz_idx]
-
-    #     # return weigths.T
-    #     return self.locally_weighted_regression(x, self.eigenvectors, c*self.epsilon)
-
-    def inverse_distance_weighting(self, x, weights, train_idx, test_idx):
-        # distances
-        values = (x[test_idx, :] - self.nodes[train_idx, :]).square().sum(dim=1)
-
-        # calculate non-zero values (zero values correspond to points that coincide with points from the training set)
-        nz_values = values >= 1e-6
-        values[nz_values] = values[nz_values].pow(-1)
-
-        # calculate inverse (squared) distance weighting (this can be become an external function) and the normalization terms
-        norms = torch.zeros(x.shape[0]).to(self.nodes.device).scatter_add_(0, test_idx, values)
-        values = torch.zeros(x.shape[0], weights.shape[1]).to(self.nodes.device).index_add_(0, test_idx, weights[train_idx, :]*values.view(-1, 1))
-
-        # calculate non-zero norms (this comes from isolated points, e.g. no neighborhood within the query ball)
-        nz_norms = norms >= 1e-6
-        values[nz_norms] /= norms[nz_norms].view(-1, 1)
-
-        # assign to the zeros values the weight at a specific point from training set
-        values[test_idx[~nz_values]] = weights[train_idx[~nz_values]]
-
-        return values
-
-    def locally_weighted_regression(self, x, weights, train_idx, test_idx, s=1.0):
-        # distances
-        values = (x[test_idx, :] - self.nodes[train_idx, :]).square().sum(dim=1)
-
-        # exp
-        values = values.div(-4*s**2).exp()
-
-        # calculate inverse (squared) distance weighting (this can be become an external function) and the normalization terms
-        norms = torch.zeros(x.shape[0]).to(self.nodes.device).scatter_add_(0, test_idx, values)
-        values = torch.zeros(x.shape[0], weights.shape[1]).to(self.nodes.device).index_add_(0, test_idx, weights[train_idx, :]*values.view(-1, 1))
-
-        # # calculate non-zero norms (this comes from isolated points, e.g. no neighborhood within the query ball)
-        # nz_norms = norms >= 1e-6
-        # values[nz_norms] /= norms[nz_norms].view(-1, 1)
-        values /= norms.view(-1, 1)
-
-        return values
-
-    def laplace_features(self, x):
-        # Degree Matrix Train Set (this part does not have to be done online)
-        idx = torch.cat((self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0)), dim=1)
-        deg = torch.zeros(self.nodes.shape[0]).to(self.nodes.device).scatter_add_(0, idx[0, :], self.values.div(-4*self.epsilon.square()).exp().squeeze().repeat(2))
-
-        # Extension Matrix
-        val, idx_t = self.knn.search(x, self.neighbors)
-        val.div_(-4*self.epsilon.square()).exp_().div_(deg[idx_t]).div_(val.sum(dim=1).view(-1, 1))
-
-        # Feature
-        return val.unsqueeze(-1).mul(self.eigenvectors[idx_t]).sum(dim=1) * torch.pow(1 - self.epsilon.square()*self.eigenvalues, -1)
-
-    def nystrom_formula(self, test_x, train_x, weights, s=1.0):
-        l = -.25 / s**2
-        xx = torch.einsum('ij,ij->i', test_x, test_x).unsqueeze(1)
-        yy = torch.einsum('ij,ij->i', train_x, train_x).unsqueeze(0)
-        k = -2 * torch.mm(test_x, train_x.T) + xx + yy
-        k *= l
-        k = torch.exp(k)
-        return torch.mm(k, weights)  # .div(k.sum(dim=1).unsqueeze(-1))
-
-    def _sigmoid_function(self, x, alpha, beta):
-        return x.sub(beta).mul(-alpha).exp().add(1.0).pow(-1)
-
-    def _bump_function(self, x, alpha, beta=1.0):
-        # y = torch.zeros_like(x)
-        # y[x.abs() < alpha] = x[x.abs() < alpha].square().sub(alpha.square()).pow(-1).mul(beta).exp().div(alpha.square().pow(-1).mul(-beta).exp())
-        # return y
-        return x.square().sub(alpha.square()).pow(-1).mul(beta).exp().div(alpha.square().pow(-1).mul(-beta).exp())
-
     def scale_posterior(self, x, beta=1.0):
         # distance from manifold
         dist, _ = self.knn.search(x, 1)
@@ -399,24 +238,6 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         y = torch.zeros_like(dist)
         y[dist.abs() < alpha] = dist[dist.abs() < alpha].square().sub(alpha.square()).pow(-1).mul(beta).exp().div(alpha.square().pow(-1).mul(-beta).exp())
         return y
-
-    # def variance(self, x):
-    #     distances, indices = self.knn.search(x, self.neighbors)
-
-    #     return torch.sum(self.spectral_density().T*self.inverse_distance_weighting(distances, self.eigenvectors[indices].pow(2).permute(2, 0, 1)), dim=0)
-
-    # def variance(self, x, c=1.0):
-    #     weights = torch.sum(self.spectral_density()*self.eigenvectors.pow(2), dim=1)
-    #     # return self.locally_weighted_regression(x, weights.view(-1, 1), c*self.epsilon)
-    #     return weights
-
-    # def inverse_distance_weighting(self, d, y):
-    #     u = torch.zeros(y.shape[0], y.shape[1]).to(d.device)
-    #     idx_zero = torch.any(d <= 1e-8, 1)
-    #     u[:, idx_zero] = y[:, idx_zero, 0]
-    #     u[:, ~idx_zero] = torch.sum(
-    #         y[:, ~idx_zero, :] / d[~idx_zero, :], dim=2).div(torch.sum(d[~idx_zero, :].pow(-1), dim=1))
-    #     return u
 
 
 class LaplacianSymmetric(LinearOperator):
@@ -434,31 +255,31 @@ class LaplacianSymmetric(LinearOperator):
         return self
 
     def diagonalization(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        # with gpytorch.settings.max_root_decomposition_size(3*self._kwargs['kernel'].modes):
-        #     evals, evecs = super().diagonalization(method="lanczos")
-        #     evals = evals[:self._kwargs['kernel'].modes]
-        #     evecs = evecs.to_dense()[:, :self._kwargs['kernel'].modes]
+        with gpytorch.settings.max_root_decomposition_size(3*self._kwargs['kernel'].modes):
+            evals, evecs = super().diagonalization(method="lanczos")
+            evals = evals[:self._kwargs['kernel'].modes]
+            evecs = evecs.to_dense()[:, :self._kwargs['kernel'].modes]
 
-        from scipy.sparse import coo_matrix
-        from scipy.sparse.linalg import eigsh
+        # from scipy.sparse import coo_matrix
+        # from scipy.sparse.linalg import eigsh
 
-        # params
-        epsilon = self._kwargs['kernel'].epsilon[0]
-        num_points = self._kwargs['kernel'].nodes.shape[0]
-        device = self._kwargs['kernel'].nodes.device
+        # # params
+        # epsilon = self._kwargs['kernel'].epsilon[0]
+        # num_points = self._kwargs['kernel'].nodes.shape[0]
+        # device = self._kwargs['kernel'].nodes.device
 
-        # values & indices
-        opt = self._kwargs['kernel'].laplacian(operator='symmetric')
-        val = -opt._args[0]
-        idx = opt._args[1]
+        # # values & indices
+        # opt = self._kwargs['kernel'].laplacian(operator='symmetric')
+        # val = -opt._args[0]
+        # idx = opt._args[1]
 
-        val = torch.cat((val.repeat(2).div(epsilon.square()), torch.ones(num_points).to(device).div(epsilon.square())), dim=0)
-        # val = torch.cat((val.repeat(2), torch.ones(num_points).to(device)), dim=0)
-        idx = torch.cat((idx, torch.stack((idx[1, :], idx[0, :]), dim=0), torch.arange(num_points).repeat(2, 1).to(device)), dim=1)
-        L = coo_matrix((val.detach().cpu().numpy(), (idx[0, :].cpu().numpy(), idx[1, :].cpu().numpy())), shape=(num_points, num_points))
-        T, V = eigsh(L, k=self._kwargs['kernel'].modes, which='SM')
-        evals = torch.from_numpy(T).float().to(device)
-        evecs = torch.from_numpy(V).float().to(device)
+        # val = torch.cat((val.repeat(2).div(epsilon.square()), torch.ones(num_points).to(device).div(epsilon.square())), dim=0)
+        # # val = torch.cat((val.repeat(2), torch.ones(num_points).to(device)), dim=0)
+        # idx = torch.cat((idx, torch.stack((idx[1, :], idx[0, :]), dim=0), torch.arange(num_points).repeat(2, 1).to(device)), dim=1)
+        # L = coo_matrix((val.detach().cpu().numpy(), (idx[0, :].cpu().numpy(), idx[1, :].cpu().numpy())), shape=(num_points, num_points))
+        # T, V = eigsh(L, k=self._kwargs['kernel'].modes, which='SM')
+        # evals = torch.from_numpy(T).float().to(device)
+        # evecs = torch.from_numpy(V).float().to(device)
 
         return evals, evecs
 
@@ -482,6 +303,7 @@ class LaplacianRandomWalk(LinearOperator):
 
         from scipy.sparse import coo_matrix
         from scipy.sparse.linalg import eigsh
+        import scipy
 
         # params
         epsilon = self._kwargs['kernel'].epsilon[0]
@@ -497,7 +319,10 @@ class LaplacianRandomWalk(LinearOperator):
         # val = torch.cat((val.repeat(2), torch.ones(num_points).to(device)), dim=0)
         idx = torch.cat((idx, torch.stack((idx[1, :], idx[0, :]), dim=0), torch.arange(num_points).repeat(2, 1).to(device)), dim=1)
         L = coo_matrix((val.detach().cpu().numpy(), (idx[0, :].cpu().numpy(), idx[1, :].cpu().numpy())), shape=(num_points, num_points))
-        T, V = eigsh(L, k=self._kwargs['kernel'].modes, which='SM')
+        if self._kwargs['kernel'].modes == num_points:
+            T, V = scipy.linalg.eigh(L.todense())
+        else:
+            T, V = eigsh(L, k=self._kwargs['kernel'].modes, which='SM')
         evals = torch.from_numpy(T).float().to(device)
         evecs = torch.from_numpy(V).float().to(device)
         evecs = evecs.mul(self._args[1].sqrt().view(-1, 1))
