@@ -39,3 +39,11 @@ def get_data(file_path, *args):
             M[var] = np.loadtxt(g)
 
     return M
+
+
+def print_mat(mat):
+    s = [[str(e) for e in row] for row in mat]
+    lens = [max(map(len, col)) for col in zip(*s)]
+    fmt = '\t'.join('{{:{}}}'.format(x) for x in lens)
+    table = [fmt.format(*row) for row in s]
+    print('\n'.join(table))
