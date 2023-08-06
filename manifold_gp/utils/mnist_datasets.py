@@ -5,6 +5,7 @@ import requests
 import gzip
 import numpy as np
 from scipy import ndimage
+import matplotlib.pyplot as plt
 
 
 class RotatedMNIST():
@@ -14,7 +15,7 @@ class RotatedMNIST():
         self.test_x = 'http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz'
         self.test_labels = 'http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz'
 
-    def generate_trainset(self, rows, cols, dataset=None, save=False):
+    def generate_trainset(self, rows, cols, dataset=None):
         if dataset is None:
             # Inputs
             request = requests.get(self.train_x)
@@ -55,14 +56,9 @@ class RotatedMNIST():
                 train_y[i*(cols+1) + j + 1] = y[i, j]
         train_x = train_x.reshape([rows*(cols+1), -1])
 
-        if save:
-            np.savetxt('benchmarks/datasets/mnist_x_train.csv', train_x)
-            np.savetxt('benchmarks/datasets/mnist_y_train.csv', train_y)
-            np.savetxt('benchmarks/datasets/mnist_label_train.csv', train_labels)
-
         return train_x, train_y, train_labels
 
-    def generate_testset(self, rows, cols, dataset=None, save=False):
+    def generate_testset(self, rows, cols, dataset=None):
         if dataset is None:
             # Inputs
             request = requests.get(self.test_x)
@@ -103,11 +99,6 @@ class RotatedMNIST():
                 test_y[i*(cols+1) + j + 1] = y[i, j]
         test_x = test_x.reshape([rows*(cols+1), -1])
 
-        if save:
-            np.savetxt('benchmarks/datasets/mnist_x_test.csv', test_x)
-            np.savetxt('benchmarks/datasets/mnist_y_test.csv', test_y)
-            np.savetxt('benchmarks/datasets/mnist_label_test.csv', test_labels)
-
         return test_x, test_y, test_labels
 
     def scale(self, X):
@@ -121,3 +112,56 @@ class RotatedMNIST():
 
     def deg_to_rad(self, X):
         return X * np.pi / 180
+
+
+if __name__ == "__main__":
+    visualize = False
+    single_digit = False
+    rot_mnist = RotatedMNIST()
+
+    if single_digit:
+        digits, _, digits_label = rot_mnist.generate_trainset(20, 0)
+        idx = [1, 8, 5, 7, 2, 0, 18, 15, 17, 4]
+        digits = digits[idx]
+        digits_labels = digits_label[idx]
+
+        train_x, train_y, train_labels = rot_mnist.generate_trainset(digits.shape[0], 1000, dataset=(digits.reshape(-1, 28, 28), digits_labels))
+        test_x, test_y, test_labels = rot_mnist.generate_trainset(digits.shape[0], 100, dataset=(digits.reshape(-1, 28, 28), digits_labels))
+
+        with open('outputs/datasets/mnist_single_train.npy', 'wb') as f:
+            np.save(f, np.concatenate((train_labels[:, np.newaxis], train_y[:, np.newaxis], train_x), axis=1))
+
+        with open('outputs/datasets/mnist_single_test.npy', 'wb') as f:
+            np.save(f, np.concatenate((test_labels[:, np.newaxis], test_y[:, np.newaxis], test_x), axis=1))
+    else:
+        train_x, train_y, train_labels = rot_mnist.generate_trainset(1000, 100)
+        test_x, test_y, test_labels = rot_mnist.generate_testset(100, 100)
+
+        with open('outputs/datasets/mnist_train.npy', 'wb') as f:
+            np.save(f, np.concatenate((train_labels[:, np.newaxis], train_y[:, np.newaxis], train_x), axis=1))
+
+        with open('outputs/datasets/mnist_test.npy', 'wb') as f:
+            np.save(f, np.concatenate((test_labels[:, np.newaxis], test_y[:, np.newaxis], test_x), axis=1))
+
+    if visualize:
+        # train
+        indices = np.random.permutation(np.arange(train_x.shape[0]))[:10]
+        fig, axs = plt.subplots(2, 5)
+        for i, index in enumerate(indices):
+            axs[0 if i <= 4 else 1, i if i <= 4 else i-5].imshow(train_x[index, :].reshape(28, 28), cmap='gray')
+            axs[0 if i <= 4 else 1, i if i <= 4 else i-5].tick_params(axis='both', which='both', bottom=False, labelbottom=False, left=False, labelleft=False)
+            axs[0 if i <= 4 else 1, i if i <= 4 else i-5].set_title('Label: ' + str(train_labels[index]) + ' Rotation: ' + str(train_y[index]))  # + ' ID: ' + str(index)
+        fig.suptitle('Train')
+        fig.tight_layout()
+
+        # test
+        indices = np.random.permutation(np.arange(test_x.shape[0]))[:10]
+        fig, axs = plt.subplots(2, 5)
+        for i, index in enumerate(indices):
+            axs[0 if i <= 4 else 1, i if i <= 4 else i-5].imshow(test_x[index, :].reshape(28, 28), cmap='gray')
+            axs[0 if i <= 4 else 1, i if i <= 4 else i-5].tick_params(axis='both', which='both', bottom=False, labelbottom=False, left=False, labelleft=False)
+            axs[0 if i <= 4 else 1, i if i <= 4 else i-5].set_title('Label: ' + str(test_labels[index]) + ' Rotation: ' + str(test_y[index]))  # + ' ID: ' + str(index)
+        fig.suptitle('Test')
+        fig.tight_layout()
+
+    plt.show()
