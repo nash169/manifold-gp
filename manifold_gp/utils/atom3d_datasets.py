@@ -4,6 +4,7 @@
 import numpy as np
 import h5py
 import atom3d.datasets as da
+import pandas as pd
 from torch.utils.data import DataLoader
 from atom3d.util.voxelize import dotdict, get_center, gen_rot_matrix, get_grid
 
