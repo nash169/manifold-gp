@@ -78,7 +78,12 @@ class RiemannGP(gpytorch.models.ExactGP):
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=1e-8)
 
         # Scheduler
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=decay_step_size, gamma=decay_magnitude)
+        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=decay_step_size, gamma=decay_magnitude)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=200,
+            threshold=1e-3, threshold_mode='rel', cooldown=0,
+            min_lr=0, eps=1e-8, verbose=True
+        )
 
         # Save log
         if save:
@@ -93,7 +98,8 @@ class RiemannGP(gpytorch.models.ExactGP):
             opt = self.noise_precision()
 
             # Loss
-            loss = 0.5 * sum([torch.dot(y.squeeze(), opt.matmul(y).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.size(-1) * math.log(2 * math.pi)])
+            with gpytorch.settings.cg_tolerance(10000):
+                loss = 0.5 * sum([torch.dot(y.squeeze(), opt.matmul(y).squeeze()), -opt.inv_quad_logdet(logdet=True)[1], y.shape[0] * math.log(2 * math.pi)])
 
             # Add log probs of priors on the (functions of) parameters
             loss_ndim = loss.ndim
@@ -106,9 +112,9 @@ class RiemannGP(gpytorch.models.ExactGP):
 
             # Print step information
             if verbose:
-                print(f"Iter: {i}, LR: {scheduler.get_last_lr()[0]:0.3f}, Loss: {loss.item():0.3f}, NoiseVar: {self.likelihood.noise.item():0.3f}", end='')
+                print(f"Iter: {i}, Loss: {loss.item():0.3f}, NoiseVar: {self.likelihood.noise.item():0.3f}", end='')  # LR: {scheduler.get_last_lr()[0]:0.3f},
                 if hasattr(self.covar_module, 'outputscale'):
-                    print(f", SignalVar: {self.covar_module.outputscale.item():0.3f}", end='')
+                    print(f", SignalVar: {self.covar_module.outputscale.item():0.5f}", end='')
                 if hasattr(self.covar_module, 'base_kernel'):
                     print(f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}, Epsilon: {self.covar_module.base_kernel.epsilon.item():0.3f}")
                 else:
@@ -126,7 +132,8 @@ class RiemannGP(gpytorch.models.ExactGP):
             #     self.covar_module.outputscale = var_norm.pow(-1)
 
             # Scheduler
-            scheduler.step()
+            scheduler.step(loss)
+            # scheduler.step()
 
             if save:
                 # Loss
@@ -153,10 +160,14 @@ class RiemannGP(gpytorch.models.ExactGP):
         except:
             self.covar_module.base_kernel.raw_epsilon.requires_grad = False
 
+        self.tmp_outputscale1 = self.covar_module.outputscale
+
         # Set signal variance for feature-based kernel
         if hasattr(self.covar_module, 'outputscale'):
             # self.covar_module.outputscale *= var_norm
             self.covar_module.outputscale = self._normalized_variance(num_rand_vec=norm_rand_vec, signal_variance=self.covar_module.outputscale)
+
+        self.tmp_outputscale2 = self.covar_module.outputscale
 
         # Save Train Log
         if save:
@@ -164,9 +175,9 @@ class RiemannGP(gpytorch.models.ExactGP):
 
     def _normalized_variance(self, num_rand_vec=100, signal_variance=None):
         precision = self.covar_module.base_kernel.precision() if signal_variance is None else ScaleWrapper(signal_variance, self.covar_module.base_kernel.precision())
-        num_points = self.covar_module.base_kernel.nodes.shape[0]
+        num_points = self.covar_module.base_kernel.num_samples
         rand_idx = torch.randint(0, num_points-1, (1, num_rand_vec))
-        rand_vec = torch.zeros(num_points, num_rand_vec).scatter_(0, rand_idx, 1.0).to(self.covar_module.base_kernel.nodes.device)
+        rand_vec = torch.zeros(num_points, num_rand_vec).scatter_(0, rand_idx, 1.0).to(self.covar_module.base_kernel.memory_device)
 
         with gpytorch.settings.max_cholesky_size(1):
             norm_var = precision.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/num_rand_vec

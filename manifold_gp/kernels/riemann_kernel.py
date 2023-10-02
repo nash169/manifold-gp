@@ -28,29 +28,50 @@ class RiemannKernel(gpytorch.kernels.Kernel):
     def __init__(self,
                  nodes: torch.Tensor, neighbors: Optional[int] = 2,
                  operator: Optional[str] = "randomwalk",
+                 method: Optional[str] = "lanczos",
                  modes: Optional[int] = 10,
                  ball_scale: Optional[float] = 1.0,
                  prior_bandwidth: Optional[bool] = False,
                  **kwargs):
         super(RiemannKernel, self).__init__(**kwargs)
 
-        # Hyperparameter
-        self.nodes = nodes.unsqueeze(-1) if nodes.ndimension() == 1 else nodes
+        self.nodes = nodes  # remove this
+
+        # adjust data dimension (we removed it for the moment because minimum embedding dimension is 2)
+        # nodes = nodes.unsqueeze(-1) if nodes.ndimension() == 1 else nodes
+
+        # data info
+        self.memory_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.memory_device = torch.device("cpu")
+        self.num_samples, self.num_dims = nodes.shape
+
+        # Number of neighborhoods for KKN
         self.neighbors = neighbors
+
+        # Type of Laplacian normalization (randomwalk, symmetric, unnormalized)
         self.operator = operator
+
+        # Method used for eigenvalue decomposition (lanczos, arpack, exact)
+        self.method = method
+
+        # Number of modes to extract
         self.modes = modes
+
+        # Support of the bump function
         self.ball_scale = ball_scale
+
+        # Enable prior on the graph bandwidth
         self.prior_bandwidth = prior_bandwidth
 
         # KNN Faiss
-        if self.nodes.is_cuda:
+        if self.memory_device.type == 'cuda':
             res = faiss.StandardGpuResources()
-            self.knn = faiss.GpuIndexIVFFlat(res, self.nodes.shape[1], 1, faiss.METRIC_L2)
+            self.knn = faiss.GpuIndexIVFFlat(res, self.num_dims, 1, faiss.METRIC_L2)
         else:
-            self.knn = faiss.IndexFlatL2(self.nodes.shape[1])
+            self.knn = faiss.IndexFlatL2(self.num_dims)
 
-        # Build graph
-        self.generate_graph()
+        # Build graph (in addition calculates the necessary parameters to initialize the graph bandwidth prior)
+        self.generate_graph(nodes)
 
         # Heat kernel length parameter for Laplacian approximation
         self.register_parameter(
@@ -75,9 +96,9 @@ class RiemannKernel(gpytorch.kernels.Kernel):
             x2 = x2.transpose(-1, -2).unsqueeze(-1)
 
         x1_eq_x2 = torch.equal(x1, x2)
-        z1 = self.features(x1, normalize=True, c=self.ball_scale)
+        z1 = self.features(x1, c=self.ball_scale)
         if not x1_eq_x2:
-            z2 = self.features(x2, normalize=True, c=self.ball_scale)
+            z2 = self.features(x2, c=self.ball_scale)
         else:
             z2 = z1
 
@@ -112,15 +133,15 @@ class RiemannKernel(gpytorch.kernels.Kernel):
     def _epsilon_closure(self, m, v):
         return m._set_epsilon(v)
 
-    def generate_graph(self):
+    def generate_graph(self, nodes):
         # KNN Search
         self.knn.reset()
-        self.knn.train(self.nodes)
-        self.knn.add(self.nodes)
-        val, idx = self.knn.search(self.nodes, self.neighbors+1)
+        self.knn.train(nodes)
+        self.knn.add(nodes)
+        val, idx = self.knn.search(nodes, self.neighbors)
 
         # Calculate epsilon lower bound (99% kernel decay)
-        min_keval = torch.tensor(1e-3).to(self.nodes.device)
+        min_keval = torch.tensor(1e-4).to(self.memory_device)
         self.eps_gte = val[:, 1].max().div(-4*min_keval.log()).sqrt()
 
         # Gamma distribution hyperparameters
@@ -131,45 +152,72 @@ class RiemannKernel(gpytorch.kernels.Kernel):
             self.eps_concentration = k_std * p_50 + 1
 
         # Make KNN Symmetric
-        rows = torch.arange(idx.shape[0]).repeat_interleave(
-            idx.shape[1]-1).to(self.nodes.device)
+        rows = torch.arange(idx.shape[0]).repeat_interleave(idx.shape[1]-1).to(self.memory_device)
         cols = idx[:, 1:].reshape(1, -1).squeeze()
         val = val[:, 1:].reshape(1, -1).squeeze()
+        # rows = torch.arange(idx.shape[0]).repeat_interleave(idx.shape[1]).to(self.nodes.device)
+        # cols = idx.reshape(1, -1).squeeze()
+        # val = val.reshape(1, -1).squeeze()
         split = cols > rows
-        rows, cols = torch.cat([rows[split], cols[~split]], dim=0), torch.cat(
-            [cols[split], rows[~split]], dim=0)
+        rows, cols = torch.cat([rows[split], cols[~split]], dim=0), torch.cat([cols[split], rows[~split]], dim=0)
         idx = torch.stack([rows, cols], dim=0)
         val = torch.cat([val[split], val[~split]])
-        self.indices, self.values = coalesce(idx, val, reduce='mean')
+        self.indices, self.values = coalesce(idx, val, reduce='mean')  # only function that requires torch_geometric (replace it with pytorch)
+
+    # def laplacian(self, operator):
+    #     if operator == 'symmetric':
+    #         # Adjacency Matrix
+    #         idx = self.indices
+    #         val = self.values.div(-4*self.epsilon.square()).exp().squeeze()
+
+    #         # Diffusion Maps Normalization
+    #         deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val).scatter_add_(0, idx[1, :], val)
+    #         val = val.div(deg[idx[0, :]]*deg[idx[1, :]])
+
+    #         # Symmetric Laplacian Normalization
+    #         deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val).scatter_add(0, idx[1, :], val).sqrt()
+    #         val.div_(deg[idx[0, :]]*deg[idx[1, :]])
+
+    #         return LaplacianSymmetric(val, idx, self.epsilon, self)
+    #     elif operator == 'randomwalk':
+    #         # Adjacency Matrix
+    #         val = self.values.div(-4*self.epsilon.square()).exp().squeeze().repeat(2)
+
+    #         # Add diagonal and build indices
+    #         val = torch.cat([torch.ones(self.num_samples).to(self.memory_device), val])
+    #         idx = torch.cat((torch.arange(self.num_samples).repeat(2, 1).to(self.memory_device), self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0)), dim=1)
+    #         # idx = torch.cat((self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0)), dim=1)
+
+    #         # Diffusion Maps Normalization
+    #         deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val)
+    #         val = val.div(deg[idx[0, :]]*deg[idx[1, :]])
+
+    #         # Random Walk Normalization
+    #         deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val)
+    #         val.div_(deg[idx[0, :]])
+
+    #         return LaplacianRandomWalk(val, deg.pow(-1), idx, self.epsilon, self)
 
     def laplacian(self, operator):
+        # Adjacency Matrix
+        val = self.values.div(-4*self.epsilon.square()).exp().squeeze().repeat(2)
+
+        # Add diagonal and build indices
+        val = torch.cat([torch.ones(self.num_samples).to(self.memory_device), val])
+        idx = torch.cat((torch.arange(self.num_samples).repeat(2, 1).to(self.memory_device), self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0)), dim=1)
+
+        # Diffusion Maps Normalization
+        deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val)
+        val = val.div(deg[idx[0, :]]*deg[idx[1, :]])
+
+        # Random Walk Normalization
         if operator == 'symmetric':
-            # Adjacency Matrix
-            idx = self.indices
-            val = self.values.div(-4*self.epsilon.square()).exp().squeeze()
-
-            # Diffusion Maps Normalization
-            deg = torch.zeros(self.nodes.shape[0]).to(self.nodes.device).scatter_add_(0, idx[0, :], val).scatter_add_(0, idx[1, :], val)
-            val = val.div(deg[idx[0, :]]*deg[idx[1, :]])
-
-            # Symmetric Laplacian Normalization
-            deg = torch.zeros(self.nodes.shape[0]).to(self.nodes.device).scatter_add_(0, idx[0, :], val).scatter_add(0, idx[1, :], val).sqrt()
+            deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val).sqrt()
             val.div_(deg[idx[0, :]]*deg[idx[1, :]])
-
             return LaplacianSymmetric(val, idx, self.epsilon, self)
         elif operator == 'randomwalk':
-            # Adjacency Matrix
-            val = self.values.div(-4*self.epsilon.square()).exp().squeeze().repeat(2)
-            idx = torch.cat((self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0)), dim=1)
-
-            # Diffusion Maps Normalization
-            deg = torch.zeros(self.nodes.shape[0]).to(self.nodes.device).scatter_add_(0, idx[0, :], val)
-            val = val.div(deg[idx[0, :]]*deg[idx[1, :]])
-
-            # Random Walk Normalization
-            deg = torch.zeros(self.nodes.shape[0]).to(self.nodes.device).scatter_add_(0, idx[0, :], val)
+            deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val)
             val.div_(deg[idx[0, :]])
-
             return LaplacianRandomWalk(val, deg.pow(-1), idx, self.epsilon, self)
 
     def generate_eigenpairs(self):
@@ -177,53 +225,61 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         self.eigenvalues = evals.detach()
         self.eigenvectors = evecs.detach()
 
-        # calculate normalization terms
-        if self.operator == "randomwalk":
-            # self.normalization = (self.spectral_density() * self.eigenvectors.square()).sum() / self.nodes.shape[0]
-            self.normalization = (self.spectral_density().div((1 - self.epsilon.square() * self.eigenvalues).square()) * self.eigenvectors.square()).sum() / self.nodes.shape[0]
-        elif self.operator == "symmetric":
-            self.normalization = self.spectral_density().sum() / self.nodes.shape[0]
+    def features(self, x: Tensor, c: float = 1.0) -> Tensor:
+        if torch.equal(x, self.nodes):  # check how to asses if I am evaluating on the training data (self.nodes not available anymore)
+            # Spectral density
+            s = self.spectral_density()
+
+            # Normalization
+            if self.operator == "randomwalk":
+                s /= (s*self.eigenvectors.square()).sum()
+            elif self.operator == "symmetric":
+                s /= s.sum()
+
+            return (s * self.num_samples).sqrt() * self.eigenvectors
         else:
-            print("Operator not implemented.")
-
-    def features(self, x: Tensor, normalize: bool = False, c: float = 1.0) -> Tensor:
-        # features weights
-        weights = (self.spectral_density() / self.normalization).sqrt()
-
-        if torch.equal(x, self.nodes):
-            return weights * self.eigenvectors
-        else:
-            # Degree Matrix Train Set (this part does not have to be done online)
-            idx = torch.cat((self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0)), dim=1)
-            deg = torch.zeros(self.nodes.shape[0]).to(self.nodes.device).scatter_add_(0, idx[0, :], self.values.div(-4*self.epsilon.square()).exp().squeeze().repeat(2))
-
             # KNN Search
-            val, idx_t = self.knn.search(x, self.neighbors)
+            val_test, idx_test = self.knn.search(x, self.neighbors)
 
             # Within support points
-            average_dist = val[:, 0].sqrt()  # val.sqrt().mean(dim=1)
+            average_dist = val_test[:, 0].sqrt()  # val.sqrt().mean(dim=1)
             ball = c*self.epsilon.squeeze()
             in_support = average_dist < ball
 
             # initiate features matrix
-            features = torch.zeros(x.shape[0], self.modes).to(self.nodes.device)
+            features = torch.zeros(x.shape[0], self.modes).to(self.memory_device)
 
             if in_support.sum() != 0:
-                # Restrict domain
-                val, idx_t = val[in_support], idx_t[in_support]
+                scale_epsilon = 1.0
+
+                # Degree Matrix Train Set (this part does not have to be done online)
+                val_train = torch.cat([torch.ones(self.num_samples).to(self.memory_device), self.values.div(-4*(self.epsilon*1.0).square()).exp().squeeze().repeat(2)])
+                idx_train = torch.cat((torch.arange(self.num_samples).repeat(2, 1).to(self.memory_device), self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0)), dim=1)
+                deg_train = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx_train[0, :], val_train)
+
+                # Restrict domain and calculate extension matrix up to first normalization
+                val_test, idx_test = val_test[in_support], idx_test[in_support]  # eps = (self.epsilon/3).square()
+                deg_test = val_test.sum(dim=1)
+                val_test.div_(-4*(self.epsilon*scale_epsilon).square()).exp_().div_(deg_train[idx_test]).div_(deg_test.view(-1, 1))
+
+                # Spectral density
+                s = self.spectral_density().div((1 - (self.epsilon*scale_epsilon).square() * self.eigenvalues).square())
 
                 # Extension Matrix
-                val.div_(-4*self.epsilon.square()).exp_().div_(deg[idx_t]).div_(val.sum(dim=1).view(-1, 1))
+                if self.operator == "randomwalk":
+                    s = s/(s*self.eigenvectors.square()).sum()*self.num_samples
+                    val_test.div_(val_test.sum(dim=1).view(-1, 1))
+                elif self.operator == "symmetric":
+                    s = s/s.sum()*self.num_samples
+                    deg_test = val_test.sum(dim=1).sqrt()
+                    val_test.div_(deg_test[idx_test]).div_(deg_test.view(-1, 1))
 
                 # Laplace/Fourier Features
-                features[in_support] = val.unsqueeze(-1).mul(self.eigenvectors[idx_t]).sum(dim=1) * torch.pow(1 - self.epsilon.square()*self.eigenvalues, -1)
-
-                # scale = average_dist[in_support].square().sub(ball.square()).pow(-1).mul(0.01).exp().div(ball.square().pow(-1).mul(-0.01).exp()).view(-1, 1)
-                # features[in_support] = scale*weights*features[in_support] + (1-scale)*self.base_feature._featurize(x[in_support], normalize=normalize)
-                features[in_support] = weights*features[in_support]
-
-            # # Fourier Features
-            # features[~in_support] = self.base_feature._featurize(x[~in_support], normalize=normalize)
+                # features[in_support] = val_test.unsqueeze(-1).mul(self.eigenvectors[idx_test]).sum(dim=1)
+                # features[in_support] = features[in_support].div(features[in_support].norm(dim=0)).mul(self.eigenvectors.norm(dim=0))
+                # features[in_support] = s.sqrt() * features[in_support]
+                features[in_support] = s.sqrt() * val_test.unsqueeze(-1).mul(self.eigenvectors[idx_test]).sum(dim=1)
+                # features[in_support] = val_test.unsqueeze(-1).mul(self.eigenvectors[idx_test]).sum(dim=1).div(1 - (self.epsilon*scale_epsilon).square() * self.eigenvalues)
 
             return features
 
@@ -245,43 +301,71 @@ class LaplacianSymmetric(LinearOperator):
         super(LaplacianSymmetric, self).__init__(values, indices, epsilon, kernel=kernel)
 
     def _matmul(self, x):
-        return x.index_add(0, self._args[1][0, :], self._args[0].view(-1, 1) * x[self._args[1][1, :]], alpha=-1) \
-                .index_add(0, self._args[1][1, :], self._args[0].view(-1, 1)*x[self._args[1][0, :]], alpha=-1).div(self._args[2].square())
+        return x.index_add(0, self._args[1][0, :], self._args[0].view(-1, 1) * x[self._args[1][1, :]], alpha=-1).div(self._args[2].square())
+        # return x.index_add(0, self._args[1][0, :], self._args[0].view(-1, 1) * x[self._args[1][1, :]], alpha=-1) \
+        #         .index_add(0, self._args[1][1, :], self._args[0].view(-1, 1)*x[self._args[1][0, :]], alpha=-1).div(self._args[2].square())
 
     def _size(self):
-        return torch.Size([self._kwargs['kernel'].nodes.shape[0], self._kwargs['kernel'].nodes.shape[0]])
+        return torch.Size([self._kwargs['kernel'].num_samples, self._kwargs['kernel'].num_samples])
 
     def _transpose_nonbatch(self):
         return self
 
     def diagonalization(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        with gpytorch.settings.max_root_decomposition_size(3*self._kwargs['kernel'].modes):
-            evals, evecs = super().diagonalization(method="lanczos")
-            evals = evals[:self._kwargs['kernel'].modes]
-            evecs = evecs.to_dense()[:, :self._kwargs['kernel'].modes]
+        if self._kwargs['kernel'].method == 'lanczos':
+            print('lanczos')
+            num_points = self._kwargs['kernel'].num_samples
+            num_eigs = 3*self._kwargs['kernel'].modes
 
-        # from scipy.sparse import coo_matrix
-        # from scipy.sparse.linalg import eigsh
+            with gpytorch.settings.max_root_decomposition_size(num_eigs if num_eigs <= num_points else num_points):
+                evals, evecs = super().diagonalization(method="lanczos")
+                evals.data[0] = 0.0000e+00  # sometimes the first eigenvalues is 1.0 for some reason
+                evals = evals[:self._kwargs['kernel'].modes]
+                evecs = evecs.to_dense()[:, :self._kwargs['kernel'].modes]
+        elif self._kwargs['kernel'].method == 'arpack':
+            print('arpack')
+            from scipy.sparse import coo_matrix
+            from scipy.sparse.linalg import eigsh
 
-        # # params
-        # epsilon = self._kwargs['kernel'].epsilon[0]
-        # num_points = self._kwargs['kernel'].nodes.shape[0]
-        # device = self._kwargs['kernel'].nodes.device
+            # params
+            epsilon = self._kwargs['kernel'].epsilon[0]
+            num_points = self._kwargs['kernel'].num_samples
+            device = self._kwargs['kernel'].memory_device
 
-        # # values & indices
-        # opt = self._kwargs['kernel'].laplacian(operator='symmetric')
-        # val = -opt._args[0]
-        # idx = opt._args[1]
+            # values & indices
+            opt = self._kwargs['kernel'].laplacian(operator='symmetric')
+            val = -opt._args[0]
+            val[:num_points] += 1.0
+            val.div_(epsilon.square())
+            idx = opt._args[1]
 
-        # val = torch.cat((val.repeat(2).div(epsilon.square()), torch.ones(num_points).to(device).div(epsilon.square())), dim=0)
-        # # val = torch.cat((val.repeat(2), torch.ones(num_points).to(device)), dim=0)
-        # idx = torch.cat((idx, torch.stack((idx[1, :], idx[0, :]), dim=0), torch.arange(num_points).repeat(2, 1).to(device)), dim=1)
-        # L = coo_matrix((val.detach().cpu().numpy(), (idx[0, :].cpu().numpy(), idx[1, :].cpu().numpy())), shape=(num_points, num_points))
-        # T, V = eigsh(L, k=self._kwargs['kernel'].modes, which='SM')
-        # evals = torch.from_numpy(T).float().to(device)
-        # evecs = torch.from_numpy(V).float().to(device)
+            # val = torch.cat((val.repeat(2).div(epsilon.square()), torch.ones(num_points).to(device).div(epsilon.square())), dim=0)
+            # val = torch.cat((val.repeat(2), torch.ones(num_points).to(device)), dim=0)
+            # idx = torch.cat((idx, torch.stack((idx[1, :], idx[0, :]), dim=0), torch.arange(num_points).repeat(2, 1).to(device)), dim=1)
+            laplacian = coo_matrix((val.detach().cpu().numpy(), (idx[0, :].cpu().numpy(), idx[1, :].cpu().numpy())), shape=(num_points, num_points))
+            evals, evecs = eigsh(laplacian, k=self._kwargs['kernel'].modes, which='SM')
+            evals = torch.from_numpy(evals).float().to(device)
+            evecs = torch.from_numpy(evecs).float().to(device)
+        elif self._kwargs['kernel'].method == 'exact':
+            print('exact')
+            # params
+            epsilon = self._kwargs['kernel'].epsilon[0]
+            num_points = self._kwargs['kernel'].num_samples
+            device = self._kwargs['kernel'].memory_device
 
-        return evals, evecs
+            # values & indices
+            opt = self._kwargs['kernel'].laplacian(operator='symmetric')
+            val = -opt._args[0]
+            val[:num_points] += 1.0
+            val.div_(epsilon.square())
+            idx = opt._args[1]
+
+            # val = torch.cat((val.repeat(2).div(epsilon.square()), torch.ones(num_points).to(device).div(epsilon.square())), dim=0)
+            # idx = torch.cat((idx, torch.stack((idx[1, :], idx[0, :]), dim=0), torch.arange(num_points).repeat(2, 1).to(device)), dim=1)
+            laplacian = torch.sparse_coo_tensor(idx, val, [num_points, num_points]).to_dense()  # dtype=torch.float64
+            evals, evecs = torch.linalg.eigh(laplacian)
+
+        return evals[:self._kwargs['kernel'].modes], evecs[:, :self._kwargs['kernel'].modes]
 
 
 class LaplacianRandomWalk(LinearOperator):
@@ -292,39 +376,13 @@ class LaplacianRandomWalk(LinearOperator):
         return x.index_add(0, self._args[2][0, :], self._args[0].view(-1, 1) * x[self._args[2][1, :]], alpha=-1).div(self._args[3].square())
 
     def _size(self):
-        return torch.Size([self._kwargs['kernel'].nodes.shape[0], self._kwargs['kernel'].nodes.shape[0]])
+        return torch.Size([self._kwargs['kernel'].num_samples, self._kwargs['kernel'].num_samples])
 
     def _transpose_nonbatch(self):
         return self
 
     def diagonalization(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        # evals, evecs = self._kwargs['kernel'].laplacian(operator='symmetric').diagonalization()
-        # evecs = evecs.mul(self._args[1].sqrt().view(-1, 1))
-
-        from scipy.sparse import coo_matrix
-        from scipy.sparse.linalg import eigsh
-        import scipy
-
-        # params
-        epsilon = self._kwargs['kernel'].epsilon[0]
-        num_points = self._kwargs['kernel'].nodes.shape[0]
-        device = self._kwargs['kernel'].nodes.device
-
-        # values & indices
-        opt = self._kwargs['kernel'].laplacian(operator='symmetric')
-        val = -opt._args[0]
-        idx = opt._args[1]
-
-        val = torch.cat((val.repeat(2).div(epsilon.square()), torch.ones(num_points).to(device).div(epsilon.square())), dim=0)
-        # val = torch.cat((val.repeat(2), torch.ones(num_points).to(device)), dim=0)
-        idx = torch.cat((idx, torch.stack((idx[1, :], idx[0, :]), dim=0), torch.arange(num_points).repeat(2, 1).to(device)), dim=1)
-        L = coo_matrix((val.detach().cpu().numpy(), (idx[0, :].cpu().numpy(), idx[1, :].cpu().numpy())), shape=(num_points, num_points))
-        if self._kwargs['kernel'].modes == num_points:
-            T, V = scipy.linalg.eigh(L.todense())
-        else:
-            T, V = eigsh(L, k=self._kwargs['kernel'].modes, which='SM')
-        evals = torch.from_numpy(T).float().to(device)
-        evecs = torch.from_numpy(V).float().to(device)
+        evals, evecs = self._kwargs['kernel'].laplacian(operator='symmetric').diagonalization()
         evecs = evecs.mul(self._args[1].sqrt().view(-1, 1))
 
         return evals, evecs
