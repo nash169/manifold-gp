@@ -26,7 +26,8 @@ class RiemannKernel(gpytorch.kernels.Kernel):
     has_lengthscale = True
 
     def __init__(self,
-                 nodes: torch.Tensor, neighbors: Optional[int] = 2,
+                 nodes: torch.Tensor,
+                 neighbors: Optional[int] = 2,
                  operator: Optional[str] = "randomwalk",
                  method: Optional[str] = "lanczos",
                  modes: Optional[int] = 10,
@@ -315,7 +316,7 @@ class LaplacianSymmetric(LinearOperator):
         if self._kwargs['kernel'].method == 'lanczos':
             print('lanczos')
             num_points = self._kwargs['kernel'].num_samples
-            num_eigs = 3*self._kwargs['kernel'].modes
+            num_eigs = 10*self._kwargs['kernel'].modes
 
             with gpytorch.settings.max_root_decomposition_size(num_eigs if num_eigs <= num_points else num_points):
                 evals, evecs = super().diagonalization(method="lanczos")
