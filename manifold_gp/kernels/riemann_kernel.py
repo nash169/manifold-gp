@@ -32,6 +32,7 @@ class RiemannKernel(gpytorch.kernels.Kernel):
                  method: Optional[str] = "lanczos",
                  modes: Optional[int] = 10,
                  ball_scale: Optional[float] = 1.0,
+                 ball_decay: Optional[float] = 0.01,
                  prior_bandwidth: Optional[bool] = False,
                  **kwargs):
         super(RiemannKernel, self).__init__(**kwargs)
@@ -58,8 +59,9 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         # Number of modes to extract
         self.modes = modes
 
-        # Support of the bump function
+        # Support and decay of the bump function
         self.ball_scale = ball_scale
+        self.ball_decay = ball_decay
 
         # Enable prior on the graph bandwidth
         self.prior_bandwidth = prior_bandwidth
@@ -282,15 +284,16 @@ class RiemannKernel(gpytorch.kernels.Kernel):
                 features[in_support] = s.sqrt() * val_test.unsqueeze(-1).mul(self.eigenvectors[idx_test]).sum(dim=1)
                 # features[in_support] = val_test.unsqueeze(-1).mul(self.eigenvectors[idx_test]).sum(dim=1).div(1 - (self.epsilon*scale_epsilon).square() * self.eigenvalues)
 
-            return features
+            return features  # self.bump_function(x).unsqueeze(-1)*
 
-    def scale_posterior(self, x, beta=1.0):
+    def bump_function(self, x):
         # distance from manifold
         dist, _ = self.knn.search(x, 1)
         dist.sqrt_().squeeze_()
 
         # manifold support
         alpha = self.ball_scale*self.epsilon.squeeze()
+        beta = self.ball_decay
 
         y = torch.zeros_like(dist)
         y[dist.abs() < alpha] = dist[dist.abs() < alpha].square().sub(alpha.square()).pow(-1).mul(beta).exp().div(alpha.square().pow(-1).mul(-beta).exp())
