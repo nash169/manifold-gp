@@ -91,3 +91,6 @@ def beautify(fig, ax):
 
     # remove margins
     fig.tight_layout()
+
+    # for c in im.collections:
+    #     c.set_edgecolor("face")
