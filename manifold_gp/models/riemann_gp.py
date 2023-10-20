@@ -13,7 +13,7 @@ from ..operators import SubBlockOperator, SchurComplementOperator
 
 
 class RiemannGP(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, kernel, labels=None):
+    def __init__(self, train_x, train_y, likelihood, kernel, labels=None, vanilla_model=None):
         super().__init__(train_x, train_y, likelihood)
 
         # This models have constant mean
@@ -24,6 +24,10 @@ class RiemannGP(gpytorch.models.ExactGP):
 
         # Store labels in case of semi-supervised scenario
         self.labels = labels
+
+        # Ambient space vanilla model
+        if vanilla_model is not None:
+            self.vanilla_model = vanilla_model
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -183,6 +187,72 @@ class RiemannGP(gpytorch.models.ExactGP):
             norm_var = precision.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/num_rand_vec
 
         return norm_var.detach()
+
+    def vanilla_training(self, lr=1e-1, iter=100, verbose=False):
+        self.train()
+        self.likelihood.train()
+
+        # Deactivate optimization mean parameters
+        self.mean_module.raw_constant.requires_grad = False
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+
+        for i in range(iter):
+            optimizer.zero_grad()
+            output = self(self.train_inputs[0])
+            loss = -mll(output, self.train_targets)
+            loss.backward()
+
+            if verbose:
+                print(f"Iter: {i}, Loss: {loss.item():0.3f}, NoiseVar: {self.likelihood.noise.item():0.3f}", end='')  # LR: {scheduler.get_last_lr()[0]:0.3f},
+                if hasattr(self.covar_module, 'outputscale'):
+                    print(f", SignalVar: {self.covar_module.outputscale.item():0.5f}", end='')
+                if hasattr(self.covar_module, 'base_kernel'):
+                    print(f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}, Epsilon: {self.covar_module.base_kernel.epsilon.item():0.3f}")
+                else:
+                    print(f", Lengthscale: {self.covar_module.lengthscale.item():0.3f}, Epsilon: {self.covar_module.epsilon.item():0.3f}")
+
+            optimizer.step()
+
+        # Activate optimization mean parameters
+        self.mean_module.raw_constant.requires_grad = True
+
+    # generate the posteriors
+    def posterior(self, x):
+        with torch.no_grad():
+            # get manifold posterior
+            self.posterior_manifold = self(x)
+            # self.posterior_manifold = self.likelihood(self(x))
+
+            if hasattr(self, "vanilla_model"):
+                # this in theory has been already calculate within the features (find a way to optimize)
+                if hasattr(self.covar_module, 'base_kernel'):
+                    self.scale_vanilla = 1-self.covar_module.base_kernel.bump_function(x)
+                else:
+                    self.scale_vanilla = 1-self.covar_module.bump_function(x)
+
+                # get vanilla posterior
+                self.posterior_vanilla = self.vanilla_model(x)
+                # self.posterior_vanilla = self.vanilla_model.likelihood(self.vanilla_model(x))
+
+    # get posterior mean
+    def mean(self, method="manifold"):
+        if method == "vanilla":
+            return self.posterior_vanilla.mean
+        elif method == "hybrid":
+            return self.posterior_manifold.mean + self.scale_vanilla*self.posterior_vanilla.mean
+        else:
+            return self.posterior_manifold.mean
+
+    # get posterior standard deviation
+    def stddev(self, method="manifold"):
+        if method == "vanilla":
+            return self.posterior_vanilla.stddev
+        elif method == "hybrid":
+            return self.posterior_manifold.stddev + self.scale_vanilla*self.posterior_vanilla.stddev
+        else:
+            return self.posterior_manifold.stddev
 
 
 class ScaleWrapper(LinearOperator):
