@@ -284,7 +284,7 @@ class RiemannKernel(gpytorch.kernels.Kernel):
                 features[in_support] = s.sqrt() * val_test.unsqueeze(-1).mul(self.eigenvectors[idx_test]).sum(dim=1)
                 # features[in_support] = val_test.unsqueeze(-1).mul(self.eigenvectors[idx_test]).sum(dim=1).div(1 - (self.epsilon*scale_epsilon).square() * self.eigenvalues)
 
-            return features  # self.bump_function(x).unsqueeze(-1)*
+            return self.bump_function(x).unsqueeze(-1)*features
 
     def bump_function(self, x):
         # distance from manifold
