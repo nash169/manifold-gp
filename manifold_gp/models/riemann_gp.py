@@ -34,16 +34,16 @@ class RiemannGP(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
-    def eval(self):
-        # Generate eigenfunctions for kernel evaluation
-        if hasattr(self.covar_module, 'base_kernel'):
-            self.covar_module.base_kernel.generate_eigenpairs()
-        else:
-            self.covar_module.generate_eigenpairs()
+    # def eval(self):
+    #     # Generate eigenfunctions for kernel evaluation
+    #     if hasattr(self.covar_module, 'base_kernel'):
+    #         self.covar_module.base_kernel.generate_eigenpairs()
+    #     else:
+    #         self.covar_module.generate_eigenpairs()
 
-        return super().eval()
+    #     return super().eval()
 
-    def noise_precision(self):
+    def precision(self, noise=True):
         # Supervised / Semisupervised Learning
         if self.labels is not None:
             # opt = SemiSupervisedWrapper(self.labels, self.covar_module.base_kernel.precision() if hasattr(self.covar_module, 'base_kernel') else self.covar_module.precision())
@@ -55,7 +55,7 @@ class RiemannGP(gpytorch.models.ExactGP):
         if hasattr(self.covar_module, 'outputscale'):
             opt = ScaleWrapper(self.covar_module.outputscale, opt)
 
-        return NoiseWrapper(self.likelihood.noise, opt)
+        return NoiseWrapper(self.likelihood.noise, opt) if noise else opt
 
     def manifold_informed_train(self, lr=1e-1, iter=100, decay_step_size=1000, decay_magnitude=1.0, norm_step_size=10, norm_rand_vec=100, verbose=False, save=False):
         self.train()
@@ -99,7 +99,7 @@ class RiemannGP(gpytorch.models.ExactGP):
             optimizer.zero_grad()
 
             # Operator
-            opt = self.noise_precision()
+            opt = self.precision()
 
             # Loss
             with gpytorch.settings.cg_tolerance(10000):
@@ -130,9 +130,9 @@ class RiemannGP(gpytorch.models.ExactGP):
             # # Re-normalize variance
             # if i % norm_step_size == 0 and i and hasattr(self.covar_module, 'outputscale'):
             #     # self.covar_module.outputscale *= var_norm
-            #     # var_norm = self._normalized_variance(num_rand_vec=num_rand_vec)
+            #     # var_norm = self._normalized_variance(num_rand_vec=norm_rand_vec)
             #     # self.covar_module.outputscale /= var_norm
-            #     var_norm = self._normalized_variance(num_rand_vec=num_rand_vec)
+            #     var_norm = self._normalized_variance(num_rand_vec=norm_rand_vec)
             #     self.covar_module.outputscale = var_norm.pow(-1)
 
             # Scheduler
@@ -164,14 +164,10 @@ class RiemannGP(gpytorch.models.ExactGP):
         except:
             self.covar_module.base_kernel.raw_epsilon.requires_grad = False
 
-        self.tmp_outputscale1 = self.covar_module.outputscale
-
         # Set signal variance for feature-based kernel
         if hasattr(self.covar_module, 'outputscale'):
             # self.covar_module.outputscale *= var_norm
             self.covar_module.outputscale = self._normalized_variance(num_rand_vec=norm_rand_vec, signal_variance=self.covar_module.outputscale)
-
-        self.tmp_outputscale2 = self.covar_module.outputscale
 
         # Save Train Log
         if save:
@@ -183,12 +179,12 @@ class RiemannGP(gpytorch.models.ExactGP):
         rand_idx = torch.randint(0, num_points-1, (1, num_rand_vec))
         rand_vec = torch.zeros(num_points, num_rand_vec).scatter_(0, rand_idx, 1.0).to(self.covar_module.base_kernel.memory_device)
 
-        with gpytorch.settings.max_cholesky_size(1):
+        with torch.no_grad(), gpytorch.settings.cg_tolerance(10000): # gpytorch.settings.max_cholesky_size(1):
             norm_var = precision.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/num_rand_vec
 
-        return norm_var.detach()
+        return norm_var
 
-    def vanilla_training(self, lr=1e-1, iter=100, verbose=False):
+    def vanilla_train(self, lr=1e-1, iter=100, verbose=False):
         self.train()
         self.likelihood.train()
 
@@ -219,11 +215,10 @@ class RiemannGP(gpytorch.models.ExactGP):
         self.mean_module.raw_constant.requires_grad = True
 
     # generate the posteriors
-    def posterior(self, x):
+    def posterior(self, x, noise=False):
         with torch.no_grad():
             # get manifold posterior
-            self.posterior_manifold = self(x)
-            # self.posterior_manifold = self.likelihood(self(x))
+            self.posterior_manifold = self.likelihood(self(x)) if noise else self(x)
 
             if hasattr(self, "vanilla_model"):
                 # this in theory has been already calculate within the features (find a way to optimize)
@@ -233,8 +228,7 @@ class RiemannGP(gpytorch.models.ExactGP):
                     self.scale_vanilla = 1-self.covar_module.bump_function(x)
 
                 # get vanilla posterior
-                self.posterior_vanilla = self.vanilla_model(x)
-                # self.posterior_vanilla = self.vanilla_model.likelihood(self.vanilla_model(x))
+                self.posterior_vanilla = self.vanilla_model.likelihood(self.vanilla_model(x)) if noise else self.vanilla_model(x)
 
     # get posterior mean
     def mean(self, method="manifold"):
