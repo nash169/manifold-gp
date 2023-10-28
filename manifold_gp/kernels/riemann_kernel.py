@@ -202,31 +202,39 @@ class RiemannKernel(gpytorch.kernels.Kernel):
     #         return LaplacianRandomWalk(val, deg.pow(-1), idx, self.epsilon, self)
 
     def laplacian(self, operator):
-        # Adjacency Matrix
-        val = self.values.div(-4*self.epsilon.square()).exp().squeeze().repeat(2)
+        # build indices
+        idx = torch.cat((torch.arange(self.num_samples).repeat(2, 1).to(self.memory_device), 
+                         self.indices, 
+                         torch.stack((self.indices[1, :], self.indices[0, :]),dim=0)), dim=1)
+        
+        # build values
+        val = torch.cat((torch.zeros(self.num_samples).to(self.memory_device), 
+                         self.values.repeat(2)))
 
-        # Add diagonal and build indices
-        val = torch.cat([torch.ones(self.num_samples).to(self.memory_device), val])
-        idx = torch.cat((torch.arange(self.num_samples).repeat(2, 1).to(self.memory_device), self.indices, torch.stack((self.indices[1, :], self.indices[0, :]), dim=0)), dim=1)
+        # adjacency matrix
+        val = val.div(-4*self.epsilon.square()).exp().squeeze()
 
-        # Diffusion Maps Normalization
+        # diffusion maps normalization
         deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val)
         val = val.div(deg[idx[0, :]]*deg[idx[1, :]])
 
-        # Random Walk Normalization
+        # symmetric laplacian normalization
         if operator == 'symmetric':
             deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val).sqrt()
             val.div_(deg[idx[0, :]]*deg[idx[1, :]])
             return LaplacianSymmetric(val, idx, self.epsilon, self)
+        # random walk laplacian normalization
         elif operator == 'randomwalk':
             deg = torch.zeros(self.num_samples).to(self.memory_device).scatter_add_(0, idx[0, :], val)
             val.div_(deg[idx[0, :]])
             return LaplacianRandomWalk(val, deg.pow(-1), idx, self.epsilon, self)
 
     def generate_eigenpairs(self):
-        evals, evecs = self.laplacian(operator=self.operator).diagonalization()
-        self.eigenvalues = evals.detach()
-        self.eigenvectors = evecs.detach()
+        # evals, evecs = self.laplacian(operator=self.operator).diagonalization()
+        # self.eigenvalues = evals.detach()
+        # self.eigenvectors = evecs.detach()
+        with torch.no_grad(), gpytorch.settings.cg_tolerance(10000):
+            self.eigenvalues, self.eigenvectors = self.laplacian(operator=self.operator).diagonalization()
 
     def features(self, x: Tensor, c: float = 1.0) -> Tensor:
         if torch.equal(x, self.nodes):  # check how to asses if I am evaluating on the training data (self.nodes not available anymore)
@@ -235,9 +243,13 @@ class RiemannKernel(gpytorch.kernels.Kernel):
 
             # Normalization
             if self.operator == "randomwalk":
-                s /= (s*self.eigenvectors.square()).sum()
+                s_norm = (s*self.eigenvectors.square()).sum()
+                s = s/s_norm
+                # s /= (s*self.eigenvectors.square()).sum()
             elif self.operator == "symmetric":
-                s /= s.sum()
+                s_norm = s.sum()
+                s = s/s_norm
+                # s /= s.sum()
 
             return (s * self.num_samples).sqrt() * self.eigenvectors
         else:
@@ -319,7 +331,7 @@ class LaplacianSymmetric(LinearOperator):
         if self._kwargs['kernel'].method == 'lanczos':
             print('lanczos')
             num_points = self._kwargs['kernel'].num_samples
-            num_eigs = 10*self._kwargs['kernel'].modes
+            num_eigs = 5*self._kwargs['kernel'].modes
 
             with gpytorch.settings.max_root_decomposition_size(num_eigs if num_eigs <= num_points else num_points):
                 evals, evecs = super().diagonalization(method="lanczos")
