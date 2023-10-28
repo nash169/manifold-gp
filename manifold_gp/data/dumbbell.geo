@@ -1,5 +1,5 @@
 // Parameters
-lc = DefineNumber[ 0.005, Name "Parameters/lc" ];
+lc = DefineNumber[ 0.02, Name "Parameters/lc" ];
 h = DefineNumber[ 0.05, Name "Parameters/h" ];
 order = DefineNumber[ 3, Name "Parameters/order" ];
 
@@ -47,9 +47,8 @@ BSpline(6) = {3, 19, 20, 21, 9, 11, 24, 23, 22, 7};
 
 Physical Curve(7) = {1, 2, 6, 4, 3, 5};
 
-// // Generate 1D mesh
-// Mesh 1;
-// SetOrder order;
-// Mesh.MshFileVersion = 2.2;
-//+
+// Generate 1D mesh
+Mesh 1;
+SetOrder order;
+Mesh.MshFileVersion = 2.2;
 
