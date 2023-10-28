@@ -53,17 +53,74 @@ def colormap_diverging(colormap, vmin, vmax, center_color=np.array([1., 1., 1., 
 
     return cmap
 
+def colormap_left(colormap, left_color=np.array([1., 1., 1., 0.]), res=1000, step=0.1):
+    # starting colormap
+    cmap = plt.get_cmap(colormap)
 
-def colorbar(im, fig, ax, ticks=None):
+    # number of sampled colors in the first half
+    p = np.arange(step, 1.0+step, step)
+
+    # starting colormap
+    cmap = plt.get_cmap(colormap)
+
+    # number of points and rest
+    w = int(res/len(p))
+    r = res - w*len(p)
+
+    # rgba colors
+    rgb = np.empty([0, 4])
+
+    # diverge from white
+    rgb = np.append(rgb, np.linspace(left_color, np.array(cmap(p[0])), w + r), axis=0)
+
+    # reconstruct colormap
+    for i in range(len(p)-1):
+        rgb = np.append(rgb, np.linspace(np.array(cmap(p[i])), np.array(cmap(p[i+1])), w), axis=0)
+    
+    # generate colormap
+    cmap = mcolors.ListedColormap(rgb)
+
+    return cmap
+
+def colormap_right(colormap, right_color=np.array([1., 1., 1., 0.]), res=1000, step=0.1):
+    # starting colormap
+    cmap = plt.get_cmap(colormap)
+
+    # number of sampled colors in the first half
+    p = np.arange(0.0, 1.0, step)
+
+    # starting colormap
+    cmap = plt.get_cmap(colormap)
+
+    # number of points and rest
+    w = int(res/len(p))
+    r = res - w*len(p)
+
+    # rgba colors
+    rgb = np.empty([0, 4])
+
+    # reconstruct colormap
+    for i in range(len(p)-1):
+        rgb = np.append(rgb, np.linspace(np.array(cmap(p[i])), np.array(cmap(p[i+1])), w), axis=0)
+
+    # converge to white
+    rgb = np.append(rgb, np.linspace(np.array(cmap(p[-1])), right_color, w + r), axis=0)
+    
+    # generate colormap
+    cmap = mcolors.ListedColormap(rgb)
+
+    return cmap
+
+def colorbar(im, fig, ax, pos="left", size="5%", pad=0.2, ticks=None):
     # colorbar location
     divider = make_axes_locatable(ax)
-    cax = divider.append_axes("left", size="5%", pad=0.2)
+    cax = divider.append_axes(pos, size=size, pad=pad)
 
     # create colorbar and set ticks
     cbar = fig.colorbar(im, cax=cax, ticks=ticks)
 
     # set location ticks
-    cax.yaxis.set_ticks_position("left")
+    cax.yaxis.set_ticks_position(pos)
 
     # remove colorbar frame
     cbar.outline.set_visible(False)
