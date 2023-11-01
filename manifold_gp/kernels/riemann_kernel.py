@@ -31,8 +31,8 @@ class RiemannKernel(gpytorch.kernels.Kernel):
                  operator: Optional[str] = "randomwalk",
                  method: Optional[str] = "lanczos",
                  modes: Optional[int] = 10,
-                 ball_scale: Optional[float] = 1.0,
-                 ball_decay: Optional[float] = 0.01,
+                 bump_scale: Optional[float] = 1.0,
+                 bump_decay: Optional[float] = 0.01,
                  prior_bandwidth: Optional[bool] = False,
                  **kwargs):
         super(RiemannKernel, self).__init__(**kwargs)
@@ -60,8 +60,8 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         self.modes = modes
 
         # Support and decay of the bump function
-        self.ball_scale = ball_scale
-        self.ball_decay = ball_decay
+        self.bump_scale = bump_scale
+        self.bump_decay = bump_decay
 
         # Enable prior on the graph bandwidth
         self.prior_bandwidth = prior_bandwidth
@@ -99,9 +99,9 @@ class RiemannKernel(gpytorch.kernels.Kernel):
             x2 = x2.transpose(-1, -2).unsqueeze(-1)
 
         x1_eq_x2 = torch.equal(x1, x2)
-        z1 = self.features(x1, c=self.ball_scale)
+        z1 = self.features(x1, c=self.bump_scale)
         if not x1_eq_x2:
-            z2 = self.features(x2, c=self.ball_scale)
+            z2 = self.features(x2, c=self.bump_scale)
         else:
             z2 = z1
 
@@ -304,8 +304,8 @@ class RiemannKernel(gpytorch.kernels.Kernel):
         dist.sqrt_().squeeze_()
 
         # manifold support
-        alpha = self.ball_scale*self.epsilon.squeeze()
-        beta = self.ball_decay
+        alpha = self.bump_scale*self.epsilon.squeeze()
+        beta = self.bump_decay
 
         y = torch.zeros_like(dist)
         y[dist.abs() < alpha] = dist[dist.abs() < alpha].square().sub(alpha.square()).pow(-1).mul(beta).exp().div(alpha.square().pow(-1).mul(-beta).exp())
