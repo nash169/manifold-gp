@@ -129,3 +129,6 @@ dmypy.json
 .pyre/
 
 outputs/
+.vscode
+datasets/
+# models/
