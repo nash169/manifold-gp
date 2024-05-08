@@ -1,6 +1,0 @@
-1d_example:
-  data:
-    num_train: 10
-    num_test: 1000
-    normalize_features: false
-    normalize_labels: true
