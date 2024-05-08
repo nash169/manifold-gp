@@ -3,7 +3,6 @@
 
 import torch
 import sys
-import gpytorch
 
 from manifold_gp.kernels.riemann_matern_kernel import RiemannMaternKernel
 from manifold_gp.operators.graph_laplacian_operator import GraphLaplacianOperator
@@ -18,7 +17,7 @@ from torch.nn.functional import normalize
 if __name__ == "__main__":
     # sampled_x, _, _, _ = rmnist_dataset()
     # sampled_x = sampled_x.flatten(start_dim=1)[:5000]
-    sampled_x, sampled_y = manifold_1D_dataset()
+    sampled_x, sampled_y, _ = manifold_1D_dataset()
 
     num_test = 10
     torch.manual_seed(1337)

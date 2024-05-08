@@ -87,9 +87,9 @@ class RiemannKernel(gpytorch.kernels.Kernel):
             x2 = x2.transpose(-1, -2).unsqueeze(-1)
 
         x1_eq_x2 = torch.equal(x1, x2)
-        z1 = self.features(x1, c=self.bump_scale)
+        z1 = self.features(x1)
         if not x1_eq_x2:
-            z2 = self.features(x2, c=self.bump_scale)
+            z2 = self.features(x2)
         else:
             z2 = z1
 
@@ -126,21 +126,21 @@ class RiemannKernel(gpytorch.kernels.Kernel):
 
         return super().eval()
 
-    def features(self, x: Tensor, c: float = 1.0) -> Tensor:
+    def features(self, x: Tensor) -> Tensor:
         if torch.equal(x, self.knn.x):
             spectral_density = self.spectral_density()
             spectral_density /= spectral_density.sum()
             return (spectral_density * self.eigvec.shape[0]).sqrt() * self.eigvec
         else:
             edge_value, edge_index = self.knn.search(x, self.nearest_neighbors)
-            x_within_support = edge_value[:, 0].sqrt() < c*self.graphbandwidth.squeeze()
+            x_within_support = edge_value[:, 0].sqrt() < self.bump_scale*self.graphbandwidth.squeeze()
             features = torch.zeros(x.shape[0], self.num_modes, device=x.device)
 
             if x_within_support.sum() != 0:
                 spectral_density = self.spectral_density().div((1 - self.graphbandwidth.square() * self.eigval).square())
                 spectral_density /= spectral_density.sum()
                 spectral_density *= self.knn.x.shape[0]
-                features[x_within_support] = spectral_density.sqrt() * self.laplacian_operator.out_of_sample(self.eigvec, edge_value[x_within_support], edge_index[x_within_support])
-                # * \ bump_function(edge_value[x_within_support, 0].sqrt(), self.bump_scale*self.graphbandwidth.squeeze(), self.bump_decay).unsqueeze(-1)
+                features[x_within_support] = spectral_density.sqrt() * self.laplacian_operator.out_of_sample(self.eigvec, edge_value[x_within_support], edge_index[x_within_support]) * \
+                    bump_function(edge_value[x_within_support, 0].sqrt(), self.bump_scale*self.graphbandwidth.squeeze(), self.bump_decay).unsqueeze(-1)
 
             return features

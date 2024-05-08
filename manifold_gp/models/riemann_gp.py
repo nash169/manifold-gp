@@ -41,7 +41,7 @@ class RiemannGP(gpytorch.models.ExactGP):
 
     def modulation(self, x):
         edge_value, _ = self.base_kernel.knn.search(x, 1)
-        return bump_function(edge_value.sqrt(), self.base_kernel.bump_scale*self.base_kernel.graphbandwidth.squeeze(), self.base_kernel.bump_decay)
+        return bump_function(edge_value.sqrt().squeeze(), self.base_kernel.bump_scale*self.base_kernel.graphbandwidth.squeeze(), self.base_kernel.bump_decay)
 
     def posterior(self, x, noisy_posterior=False, base_model=None):
         with torch.no_grad():

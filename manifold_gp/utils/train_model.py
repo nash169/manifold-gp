@@ -90,7 +90,7 @@ def manifold_informed_train(model, optimizer, max_iter=100, tolerance=1e-2, max_
 
     if hasattr(model.covar_module, 'outputscale'):
         with gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
-            model.covar_module.outputscale *= model.covar_module.base_kernel.precision()._average_variance(num_rand_vec=100)
+            model.covar_module.outputscale *= model.covar_module.base_kernel.precision()._average_variance(num_rand_vec=num_rand_vec)
 
     # gc.collect()
     torch.cuda.empty_cache()

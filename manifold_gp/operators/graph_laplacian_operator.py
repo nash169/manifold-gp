@@ -124,7 +124,7 @@ class GraphLaplacianOperator(LinearOperator):
                 return evals, evecs
 
     def out_of_sample(self, x, edge_value, edge_idx):
-        out = edge_value.div(-4*self.graphbandwidth.square()).exp().squeeze()
+        out = edge_value.div(-4*self.graphbandwidth.square()).exp()
         degree_test = out.sum(dim=1)
         out /= self.degree_unnorm_mat[edge_idx]*degree_test.view(-1, 1)
 
