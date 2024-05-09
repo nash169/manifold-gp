@@ -24,9 +24,7 @@ setup(
     ],
     python_requires='>=3.6',
     install_requires=[
-        "numpy",                # math
-        "matplotlib",           # plotting
-        "torch",                # net framework
+        "torch",
         "torch-scatter",
         "torch-sparse",
         "faiss",
@@ -34,15 +32,18 @@ setup(
     ],
     extras_require={
         "pytorch": [
-            "torchvision",      # net framework GPU
+            "numpy",
+            "matplotlib",
+            "torchvision",
             "torchaudio",
-            "tensorflow"
+            "tensorflow",
+            "mayavi"
         ],
         "dev": [
-            "pylint",           # python linter
+            "pylint",
         ]
     },
     package_data={
-        "manifold_gp.data": ["*.msh", "*.stl", "*.csv"],
+        "manifold_gp.data": ["*.msh", "*.stl", "*.csv", "*.npy"],
     }
 )
