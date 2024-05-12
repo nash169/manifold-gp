@@ -44,12 +44,12 @@ def vanilla_train(model, optimizer, max_iter=100, max_cholesky=800, tolerance=1e
     return loss.item()
 
 
-def manifold_informed_train(model, optimizer, max_iter=100, tolerance=1e-2, max_cholesky=800, cg_tolerance=1e-2, cg_max_iter=1000, num_rand_vec=100, scheduler=None, verbose=False):
+def manifold_informed_train(model, optimizer, max_iter=100, tolerance=1e-2, update_norm=None, num_rand_vec=100, max_cholesky=800, cg_tolerance=1e-2, cg_max_iter=1000, scheduler=None, verbose=False):
     model.train()
     model.likelihood.train()
 
     if hasattr(model.covar_module, 'outputscale'):
-        with gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
+        with torch.no_grad(), gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
             model.covar_module.outputscale /= model.covar_module.base_kernel.precision()._average_variance(num_rand_vec=num_rand_vec)
 
     epoch = 0
@@ -80,16 +80,21 @@ def manifold_informed_train(model, optimizer, max_iter=100, tolerance=1e-2, max_
             if hasattr(model.covar_module, 'outputscale'):
                 print(f", Signal Variance: {model.covar_module.outputscale.sqrt().item():0.3f}", end='')
             if hasattr(model.covar_module, 'base_kernel'):
-                print(f", Lengthscale: {model.covar_module.base_kernel.lengthscale.item():0.3f}")
+                print(f", Lengthscale: {model.covar_module.base_kernel.lengthscale.item():0.3f}, Graphbandwidth: {model.covar_module.base_kernel.graphbandwidth.item():0.3f}")
             else:
-                print(f", Lengthscale: {model.covar_module.lengthscale.item():0.3f}")
+                print(f", Lengthscale: {model.covar_module.lengthscale.item():0.3f}, Graphbandwidth: {model.covar_module.graphbandwidth.item():0.3f}")
 
         epoch += 1
         if abs(loss.item() - prev_loss) <= tolerance:
             break
 
+        if update_norm is not None and epoch % update_norm == 0:
+            print("Update covariance normalization at epoch: ", epoch)
+            with torch.no_grad(), gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
+                model.covar_module.outputscale = 1/model.covar_module.base_kernel.precision()._average_variance(num_rand_vec=num_rand_vec)
+
     if hasattr(model.covar_module, 'outputscale'):
-        with gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
+        with torch.no_grad(), gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
             model.covar_module.outputscale *= model.covar_module.base_kernel.precision()._average_variance(num_rand_vec=num_rand_vec)
 
     # gc.collect()

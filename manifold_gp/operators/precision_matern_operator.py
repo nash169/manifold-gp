@@ -47,5 +47,4 @@ class PrecisionMaternOperator(LinearOperator):
         rand_idx = torch.randint(0, d-1, (1, num_rand_vec), device=self.lengthscale.device)
         rand_vec = torch.zeros(d, num_rand_vec, device=self.lengthscale.device).scatter_(0, rand_idx, 1.0)
 
-        with torch.no_grad():
-            return self.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/num_rand_vec
+        return self.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/num_rand_vec
