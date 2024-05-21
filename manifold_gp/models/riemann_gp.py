@@ -4,7 +4,6 @@
 import torch
 import gpytorch
 
-from linear_operator.utils.memoize import cached
 from ..operators import SchurComplementOperator, ScaleWrapperOperator, NoiseWrapperOperator
 from ..utils import bump_function
 
@@ -44,11 +43,10 @@ class RiemannGP(gpytorch.models.ExactGP):
         return bump_function(edge_value.sqrt().squeeze(), self.base_kernel.bump_scale*self.base_kernel.graphbandwidth.squeeze(), self.base_kernel.bump_decay)
 
     def posterior(self, x, noisy_posterior=False, base_model=None):
-        with torch.no_grad():
-            self.posterior_geom = self.likelihood(self(x)) if noisy_posterior else self(x)
-            if base_model is not None:
-                self.posterior_base = base_model.likelihood(base_model(x)) if noisy_posterior else base_model(x)
-                self.base_scale = 1 - self.modulation(x)
+        self.posterior_geom = self.likelihood(self(x)) if noisy_posterior else self(x)
+        if base_model is not None:
+            self.posterior_base = base_model.likelihood(base_model(x)) if noisy_posterior else base_model(x)
+            self.base_scale = 1 - self.modulation(x)
         return self
 
     @property
@@ -56,9 +54,22 @@ class RiemannGP(gpytorch.models.ExactGP):
         return self.covar_module.base_kernel if hasattr(self.covar_module, 'base_kernel') else self.covar_module
 
     @property
-    def mean(self):
-        return self.posterior_geom.mean + self.base_scale*self.posterior_base.mean if hasattr(self, "posterior_base") else self.posterior_geom.mean
+    def posterior_mean(self):
+        mean = self.posterior_geom.mean
+        if hasattr(self, "posterior_base"):
+            mean += self.base_scale*self.posterior_base.mean
+        return mean
 
     @property
-    def stddev(self):
-        return self.posterior_geom.stddev + self.base_scale*self.posterior_base.stddev if hasattr(self, "posterior_base") else self.posterior_geom.stddev
+    def posterior_covar(self):
+        covar = self.posterior_geom.lazy_covariance_matrix.evaluate_kernel()
+        if hasattr(self, "posterior_base"):
+            covar += torch.outer(self.base_scale, self.base_scale) * self.posterior_base.lazy_covariance_matrix.evaluate_kernel()
+        return covar
+
+    @property
+    def posterior_stddev(self):
+        stddev = self.posterior_geom.stddev
+        if hasattr(self, "posterior_base"):
+            stddev += self.base_scale*self.posterior_base.stddev
+        return stddev

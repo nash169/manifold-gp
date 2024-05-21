@@ -61,27 +61,3 @@ class NearestNeighbors():
     @min_ivf.setter
     def min_ivf(self, value):
         self._min_ivf = value
-
-
-def knngraph(x, k, diag=False, full=False, device=torch.device("cpu")):
-    knn = faiss.IndexFlatL2(x.shape[1])
-    knn.train(x)
-    knn.add(x)
-    val, idx = knn.search(x, k)
-    rows = torch.arange(idx.shape[0]).repeat_interleave(idx.shape[1]-1)
-    cols = idx[:, 1:].reshape(1, -1).squeeze()
-    val = val[:, 1:].reshape(1, -1).squeeze()
-
-    split = cols > rows
-    rows, cols = torch.cat([rows[split], cols[~split]], dim=0), torch.cat([cols[split], rows[~split]], dim=0)
-    idx, val = coalesce(torch.stack([rows, cols], dim=0), torch.cat([val[split], val[~split]]), x.shape[0], x.shape[0], op='mean')
-
-    if full:
-        val = val.repeat(2)
-        idx = torch.cat((idx, torch.stack((idx[1], idx[0]), dim=0)), dim=1)
-
-    if diag:
-        val = torch.cat((torch.zeros(x.shape[0]), val))
-        idx = torch.cat((torch.arange(x.shape[0]).repeat(2, 1), idx), dim=1)
-
-    return idx, val

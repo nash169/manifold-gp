@@ -7,12 +7,10 @@ import sys
 from manifold_gp.kernels.riemann_matern_kernel import RiemannMaternKernel
 from manifold_gp.operators.graph_laplacian_operator import GraphLaplacianOperator
 
-from manifold_gp.utils.nearest_neighbors import knngraph, NearestNeighbors
-from manifold_gp.utils.load_dataset import rmnist_dataset, manifold_1D_dataset
-from test._dense_operators import graph_laplacian
 from test._test_functions import *
+from test._dense_operators import graph_laplacian
+from manifold_gp.utils import NearestNeighbors, rmnist_dataset, manifold_1D_dataset
 
-from torch.nn.functional import normalize
 
 if __name__ == "__main__":
     # sampled_x, _, _, _ = rmnist_dataset()
@@ -35,7 +33,7 @@ if __name__ == "__main__":
     kernel = RiemannMaternKernel(
         nu=1,
         x=train_x,
-        nearest_neighbors=20,
+        nearest_neighbors=50,
         laplacian_normalization=normalization,
         num_modes=10,
         bump_scale=3.0,
@@ -45,7 +43,7 @@ if __name__ == "__main__":
     ).to(device)
 
     hypers = {
-        'graphbandwidth': 0.02,
+        'graphbandwidth': 0.2,
         'lengthscale': 0.5,
     }
     kernel.initialize(**hypers)
@@ -67,3 +65,9 @@ if __name__ == "__main__":
     edge_value, edge_index = knn.search(test_x, kernel.nearest_neighbors)
     test_outofsample(edge_value, edge_index, dense_eval, dense_evec, laplacian_sparse, sparse_eval, sparse_evec,
                      degree_unorm_dense, degree_dense, kernel.graphbandwidth, kernel.lengthscale, kernel.nu, normalization)
+
+    # with torch.no_grad():
+    #     idx_tmp = torch.cat((torch.arange(laplacian_sparse.operator_dimension, device=laplacian_sparse.device).repeat(2, 1),
+    #                         laplacian_sparse.idx, torch.stack((laplacian_sparse.idx[1], laplacian_sparse.idx[0]), dim=0)), dim=1)
+    #     val_tmp = torch.cat((laplacian_sparse.laplacian_diag, -laplacian_sparse.laplacian_triu.repeat(2)))
+    #     evals_tmp, evecs_tmp = torch.linalg.eigh(torch.sparse_coo_tensor(idx_tmp, val_tmp, [laplacian_sparse.operator_dimension, laplacian_sparse.operator_dimension]).to_dense())

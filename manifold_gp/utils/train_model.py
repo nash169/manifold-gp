@@ -70,19 +70,19 @@ def manifold_informed_train(model, optimizer, max_iter=100, tolerance=1e-2, upda
             prior_term = prior.log_prob(closure(module))
             loss.sub_(prior_term.view(*prior_term.shape[:loss_ndim], -1).sum(dim=-1))
 
-        loss.backward()
-        optimizer.step()
-        if scheduler is not None:
-            scheduler.step(loss)
-
         if verbose:
-            print(f"Iteration: {epoch}, Loss: {loss.item():0.3f}, Noise Variance: {model.likelihood.noise.sqrt().item():0.3f}", end='')
+            print(f"Iteration: {epoch}, Loss: {loss.item():0.3f}, Noise Variance: {model.likelihood.noise.item():0.3f}", end='')
             if hasattr(model.covar_module, 'outputscale'):
-                print(f", Signal Variance: {model.covar_module.outputscale.sqrt().item():0.3f}", end='')
+                print(f", Signal Variance: {model.covar_module.outputscale.item():0.3f}", end='')
             if hasattr(model.covar_module, 'base_kernel'):
                 print(f", Lengthscale: {model.covar_module.base_kernel.lengthscale.item():0.3f}, Graphbandwidth: {model.covar_module.base_kernel.graphbandwidth.item():0.3f}")
             else:
                 print(f", Lengthscale: {model.covar_module.lengthscale.item():0.3f}, Graphbandwidth: {model.covar_module.graphbandwidth.item():0.3f}")
+
+        loss.backward()
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step(loss)
 
         epoch += 1
         if abs(loss.item() - prev_loss) <= tolerance:
@@ -91,7 +91,7 @@ def manifold_informed_train(model, optimizer, max_iter=100, tolerance=1e-2, upda
         if update_norm is not None and epoch % update_norm == 0:
             print("Update covariance normalization at epoch: ", epoch)
             with torch.no_grad(), gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
-                model.covar_module.outputscale = 1/model.covar_module.base_kernel.precision()._average_variance(num_rand_vec=num_rand_vec)
+                model.covar_module.outputscale /= model.covar_module.base_kernel.precision()._average_variance(num_rand_vec=num_rand_vec)
 
     if hasattr(model.covar_module, 'outputscale'):
         with torch.no_grad(), gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):

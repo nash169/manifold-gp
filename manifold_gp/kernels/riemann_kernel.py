@@ -6,19 +6,12 @@ from abc import abstractmethod
 import math
 import torch
 from torch import Tensor
-import faiss
-import faiss.contrib.torch_utils
 
 import gpytorch
 from gpytorch.priors import Prior
-from gpytorch.constraints import Positive, Interval
+from gpytorch.constraints import Positive, Interval, GreaterThan
 
-
-from torch_geometric.utils import coalesce
-from torch_geometric.nn import radius
-
-from typing import Optional, Tuple, Union
-from linear_operator import LinearOperator
+from typing import Optional
 from linear_operator.operators import LowRankRootLinearOperator, MatmulLinearOperator, RootLinearOperator
 
 from manifold_gp.priors.inverse_gamma_prior import InverseGammaPrior
@@ -122,7 +115,13 @@ class RiemannKernel(gpytorch.kernels.Kernel):
     def eval(self):
         self.laplacian_operator = self.laplacian()
         with torch.no_grad():
-            self.eigval, self.eigvec = self.laplacian_operator.diagonalization(num_modes=self.num_modes)
+            # self.eigval, self.eigvec = self.laplacian_operator.diagonalization(num_modes=self.num_modes)
+            idx = torch.cat((torch.arange(self.laplacian_operator.operator_dimension, device=self.laplacian_operator.device).repeat(2, 1),
+                             self.laplacian_operator.idx, torch.stack((self.laplacian_operator.idx[1], self.laplacian_operator.idx[0]), dim=0)), dim=1)
+            val = torch.cat((self.laplacian_operator.laplacian_diag, -self.laplacian_operator.laplacian_triu.repeat(2)))
+            self.eigval, self.eigvec = torch.linalg.eigh(torch.sparse_coo_tensor(idx, val, [self.laplacian_operator.operator_dimension, self.laplacian_operator.operator_dimension]).to_dense())
+            self.eigval, self.eigvec = self.eigval[:self.num_modes], self.eigvec[:, :self.num_modes]
+            self.eigval[0] = 0.0
 
         return super().eval()
 

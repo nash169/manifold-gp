@@ -5,13 +5,6 @@ import math
 import torch
 import gpytorch
 
-from manifold_gp.kernels.riemann_matern_kernel import RiemannMaternKernel
-from manifold_gp.models.riemann_gp import RiemannGP
-from manifold_gp.operators.graph_laplacian_operator import GraphLaplacianOperator
-
-from manifold_gp.utils.nearest_neighbors import knngraph, NearestNeighbors
-from manifold_gp.utils.load_dataset import rmnist_dataset, manifold_1D_dataset
-from test._dense_operators import graph_laplacian
 from manifold_gp.utils.iostream import bcolors
 
 
@@ -42,7 +35,7 @@ def test_mv_transpose(dense_operator, sparse_operator, v):
 def test_diag(dense_operator, sparse_operator):
     print("Test matrix(transpose)-vector multiplication")
     dense_diag = dense_operator.diag()[:10]
-    sparse_diag = sparse_operator._diagonal[:10]
+    sparse_diag = sparse_operator.diagonal()[:10]
     print([round(elem, 5) for elem in dense_diag.tolist()])
     print([round(elem, 5) for elem in sparse_diag.tolist()])
     if [round(elem, 5) for elem in dense_diag.tolist()] == [round(elem, 5) for elem in sparse_diag.tolist()]:

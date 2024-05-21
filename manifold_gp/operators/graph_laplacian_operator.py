@@ -76,13 +76,16 @@ class GraphLaplacianOperator(LinearOperator):
 
     @property
     @cached(name="laplacian_diag")
-    def _diagonal(self: LinearOperator) -> Tensor:
+    def laplacian_diag(self: Float[LinearOperator, "N N"]) -> Float[torch.Tensor, "N"]:
         # print("laplacian_diag")
         return (1 - self.degree_unnorm_mat.pow(-2)*self.degree_mat.pow(-1)).div(self.graphbandwidth.square().squeeze())
 
+    def _diagonal(self: LinearOperator) -> Tensor:
+        return self.laplacian_diag
+
     @property
-    @cached(name="laplacian_mat")
-    def laplacian_mat(self: Float[LinearOperator, "N N"]) -> Float[torch.Tensor, "M"]:
+    @cached(name="laplacian_triu")
+    def laplacian_triu(self: Float[LinearOperator, "N N"]) -> Float[torch.Tensor, "M"]:
         degree_sqrt = self.degree_mat.sqrt()
         return self.adjacency_mat.div(degree_sqrt[self.idx[0, :]]*degree_sqrt[self.idx[1, :]]).div(self.graphbandwidth.square().squeeze())
 
@@ -95,9 +98,9 @@ class GraphLaplacianOperator(LinearOperator):
         else:
             vec = rhs.contiguous()
 
-        out = vec * self._diagonal.view(-1, 1)
-        out -= spmm(self.idx, self.laplacian_mat, self.operator_dimension, self.operator_dimension, vec)
-        out -= spmm(torch.stack((self.idx[1], self.idx[0]), dim=0), self.laplacian_mat, self.operator_dimension, self.operator_dimension, vec)
+        out = vec * self.laplacian_diag.view(-1, 1)
+        out -= spmm(self.idx, self.laplacian_triu, self.operator_dimension, self.operator_dimension, vec)
+        out -= spmm(torch.stack((self.idx[1], self.idx[0]), dim=0), self.laplacian_triu, self.operator_dimension, self.operator_dimension, vec)
 
         if self.normalization == "randomwalk":
             out *= self.degree_mat.pow(0.5).view(-1, 1) if self.transposed else self.degree_mat.pow(-0.5).view(-1, 1)
@@ -114,6 +117,7 @@ class GraphLaplacianOperator(LinearOperator):
         with gpytorch.settings.max_root_decomposition_size(3*num_modes if num_modes is not None and 3*num_modes <= self.shape[0] else self.shape[0]):
             if self.normalization == 'symmetric':
                 evals, evecs = super().diagonalization(method)
+                evals[0] = 0.0
                 if num_modes is not None and num_modes < self.shape[0]:
                     evals, evecs = evals[:num_modes], evecs[:, :num_modes]
                 return evals, evecs.to_dense()

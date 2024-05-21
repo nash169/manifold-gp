@@ -132,3 +132,4 @@ outputs/
 .vscode
 datasets/
 # models/
+rmnist_*

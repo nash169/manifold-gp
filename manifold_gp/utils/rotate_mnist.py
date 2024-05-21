@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
+import sys
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
@@ -30,9 +31,18 @@ def rotate_mnist(samples, labels, num_samples, rots_sample):
 
 
 if __name__ == "__main__":
+    single_digit = True if len(sys.argv) > 1 and sys.argv[1] == "single" else False
     (train_samples, train_labels), (test_samples, test_labels) = tf.keras.datasets.mnist.load_data()
-    sampled_x, sampled_y, sampled_labels = rotate_mnist(train_samples, train_labels, num_samples=1000, rots_sample=10)
-    test_x, test_y, test_labels = rotate_mnist(test_samples, test_labels, num_samples=100, rots_sample=10)
+
+    if single_digit:
+        digits_idx = [1, 8, 5, 7, 2, 0, 18, 15, 17, 4]  # 9, 7, 4, 5, 6, 0, 3, 1, 2, 8
+        sampled_x, sampled_y, sampled_labels = rotate_mnist(train_samples[digits_idx], train_labels[digits_idx], num_samples=len(digits_idx), rots_sample=0)
+    else:
+        sampled_x, sampled_y, sampled_labels = rotate_mnist(train_samples, train_labels, num_samples=100, rots_sample=100)
+        # test_x, test_y, test_labels = rotate_mnist(test_samples, test_labels, num_samples=100, rots_sample=10)
+
+    # rand_idx = np.random.permutation(sampled_x.shape[0])
+    # sampled_x, sampled_y, sampled_labels = sampled_x[rand_idx], sampled_y[rand_idx], sampled_labels[rand_idx]
 
     fig, axs = plt.subplots(2, 5)
     for i, index in enumerate(np.random.permutation(np.arange(sampled_x.shape[0]))[:10]):
@@ -41,11 +51,3 @@ if __name__ == "__main__":
         axs[0 if i <= 4 else 1, i if i <= 4 else i-5].set_title('Label: ' + str(sampled_labels[index]) + ' Rotation: ' + str(sampled_y[index]))
     fig.tight_layout()
     plt.show(block=False)
-
-    np.save('manifold_gp/data/rmnist_train_x', sampled_x)
-    np.save('manifold_gp/data/rmnist_train_y', sampled_y)
-    np.save('manifold_gp/data/rmnist_train_labels', sampled_labels)
-
-    np.save('manifold_gp/data/rmnist_test_x', test_x)
-    np.save('manifold_gp/data/rmnist_test_y', test_y)
-    np.save('manifold_gp/data/rmnist_test_labels', test_labels)

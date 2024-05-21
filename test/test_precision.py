@@ -2,26 +2,15 @@
 # encoding: utf-8
 
 import sys
-import math
 import torch
 import gpytorch
 
-from manifold_gp.kernels.riemann_matern_kernel import RiemannMaternKernel
-from manifold_gp.models.riemann_gp import RiemannGP
-
-from manifold_gp.operators.graph_laplacian_operator import GraphLaplacianOperator
-from manifold_gp.operators.precision_matern_operator import PrecisionMaternOperator
-from manifold_gp.operators.scale_wrapper_operator import ScaleWrapperOperator
-from manifold_gp.operators.noise_wrapper_operator import NoiseWrapperOperator
-from manifold_gp.operators.schur_complement_operator import SchurComplementOperator
-
-from linear_operator.operators import MaskedLinearOperator
-from manifold_gp.models.riemann_gp import SubBlockOperator
-
-from manifold_gp.utils.nearest_neighbors import knngraph, NearestNeighbors
-from manifold_gp.utils.load_dataset import rmnist_dataset, manifold_1D_dataset
-from test._dense_operators import *
+from manifold_gp.kernels import RiemannMaternKernel
+from manifold_gp.models import RiemannGP
+from manifold_gp.operators import GraphLaplacianOperator, PrecisionMaternOperator, ScaleWrapperOperator, NoiseWrapperOperator, SchurComplementOperator
 from test._test_functions import *
+from test._dense_operators import *
+from manifold_gp.utils import NearestNeighbors, rmnist_dataset, manifold_1D_dataset
 
 
 if __name__ == "__main__":
