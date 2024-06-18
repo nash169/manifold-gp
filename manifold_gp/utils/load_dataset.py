@@ -29,8 +29,10 @@ def rmnist_dataset(scaling=True, single_digit=False, regenerate=False):
     if single_digit:
         if os.path.isfile(files('manifold_gp.data').joinpath('srmnist_train_x.npy')) and not regenerate:
             print("Loading SRMNIST")
-            sampled_x, sampled_y = np.load(files('manifold_gp.data').joinpath('srmnist_train_x.npy')), np.load(files('manifold_gp.data').joinpath('srmnist_train_y.npy'))
-            test_x, test_y = np.load(files('manifold_gp.data').joinpath('srmnist_test_x.npy')), np.load(files('manifold_gp.data').joinpath('srmnist_test_y.npy'))
+            sampled_x, sampled_y, sampled_labels = np.load(files('manifold_gp.data').joinpath('srmnist_train_x.npy')), np.load(
+                files('manifold_gp.data').joinpath('srmnist_train_y.npy')), np.load(files('manifold_gp.data').joinpath('srmnist_train_labels.npy'))
+            test_x, test_y, test_labels = np.load(files('manifold_gp.data').joinpath('srmnist_test_x.npy')), np.load(
+                files('manifold_gp.data').joinpath('srmnist_test_y.npy')), np.load(files('manifold_gp.data').joinpath('srmnist_test_labels.npy'))
         else:
             print("Generating SRMNIST")
             import tensorflow as tf
@@ -55,8 +57,10 @@ def rmnist_dataset(scaling=True, single_digit=False, regenerate=False):
     else:
         if os.path.isfile(files('manifold_gp.data').joinpath('rmnist_train_x.npy')) and not regenerate:
             print("Loading RMNIST")
-            sampled_x, sampled_y = np.load(files('manifold_gp.data').joinpath('rmnist_train_x.npy')), np.load(files('manifold_gp.data').joinpath('rmnist_train_y.npy'))
-            test_x, test_y = np.load(files('manifold_gp.data').joinpath('rmnist_test_x.npy')), np.load(files('manifold_gp.data').joinpath('rmnist_test_y.npy'))
+            sampled_x, sampled_y, sampled_labels = np.load(files('manifold_gp.data').joinpath('rmnist_train_x.npy')), np.load(
+                files('manifold_gp.data').joinpath('rmnist_train_y.npy')), np.load(files('manifold_gp.data').joinpath('rmnist_train_labels.npy'))
+            test_x, test_y, test_labels = np.load(files('manifold_gp.data').joinpath('rmnist_test_x.npy')), np.load(
+                files('manifold_gp.data').joinpath('rmnist_test_y.npy')), np.load(files('manifold_gp.data').joinpath('rmnist_test_labels.npy'))
         else:
             print("Generating RMNIST")
             import tensorflow as tf
@@ -82,7 +86,7 @@ def rmnist_dataset(scaling=True, single_digit=False, regenerate=False):
         sampled_x = (sampled_x - (255. / 2.0)) / 255.
         test_x = (test_x - (255. / 2.0)) / 255.
 
-    return torch.from_numpy(sampled_x).float(), torch.from_numpy(sampled_y).float(), torch.from_numpy(test_x).float(), torch.from_numpy(test_y).float()
+    return torch.from_numpy(sampled_x).float(), torch.from_numpy(sampled_y).float(), torch.from_numpy(sampled_labels).int(), torch.from_numpy(test_x).float(), torch.from_numpy(test_y).float(), torch.from_numpy(test_labels).int()
 
 
 def groundtruth_from_samples(vertices, edges):

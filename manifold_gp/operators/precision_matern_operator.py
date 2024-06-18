@@ -44,7 +44,10 @@ class PrecisionMaternOperator(LinearOperator):
 
     def _average_variance(self, num_rand_vec=100):
         d = self.shape[0]
-        rand_idx = torch.randint(0, d-1, (1, num_rand_vec), device=self.lengthscale.device)
-        rand_vec = torch.zeros(d, num_rand_vec, device=self.lengthscale.device).scatter_(0, rand_idx, 1.0)
+        if num_rand_vec >= d:
+            rand_vec = torch.eye(d, device=self.lengthscale.device)
+        else:
+            rand_idx = torch.randint(0, d-1, (1, num_rand_vec), device=self.lengthscale.device)
+            rand_vec = torch.zeros(d, num_rand_vec, device=self.lengthscale.device).scatter_(0, rand_idx, 1.0)
 
-        return self.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/num_rand_vec
+        return self.inv_quad_logdet(inv_quad_rhs=rand_vec, logdet=False)[0]/rand_vec.shape[1]
