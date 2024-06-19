@@ -27,7 +27,7 @@ setup(
         "torch",
         "torch-scatter",
         "torch-sparse",
-        "faiss",
+        "faiss-gpu",
         "gpytorch"
     ],
     extras_require={
