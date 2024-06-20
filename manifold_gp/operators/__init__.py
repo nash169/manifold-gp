@@ -10,6 +10,6 @@ __all__ = [
     "GraphLaplacianOperator",
     "PrecisionMaternOperator",
     "ScaleWrapperOperator",
-    "NoiseWrapperOperator"
+    "NoiseWrapperOperator",
     "SchurComplementOperator"
 ]
