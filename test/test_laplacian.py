@@ -28,6 +28,7 @@ if __name__ == "__main__":
     train_x, test_x, train_y, test_y = train_x.contiguous().to(device), test_x.contiguous().to(device), train_y.contiguous().to(device), test_y.contiguous().to(device)
 
     normalization = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in ["symmetric", "randomwalk"] else "symmetric"
+    self_loops = False
 
     # kernel
     kernel = RiemannMaternKernel(
@@ -35,7 +36,7 @@ if __name__ == "__main__":
         x=train_x,
         nearest_neighbors=50,
         laplacian_normalization=normalization,
-        num_modes=10,
+        num_modes=20,
         bump_scale=3.0,
         bump_decay=1.0,
         graphbandwidth_prior=None,
@@ -43,7 +44,7 @@ if __name__ == "__main__":
     ).to(device)
 
     hypers = {
-        'graphbandwidth': 0.2,
+        'graphbandwidth': 0.5,
         'lengthscale': 0.5,
     }
     kernel.initialize(**hypers)
@@ -51,8 +52,8 @@ if __name__ == "__main__":
     # laplacian
     knn = NearestNeighbors(train_x, nlist=1)
     idx, val = knn.graph(kernel.nearest_neighbors, nprobe=1)
-    laplacian_sparse = GraphLaplacianOperator(val, idx, train_x.shape[0], kernel.graphbandwidth, normalization)  # kernel.laplacian(normalization)
-    laplacian_dense, _, degree_unorm_dense, _, degree_dense = graph_laplacian(idx, val, kernel.graphbandwidth, train_x.shape[0], normalization=normalization)
+    laplacian_sparse = GraphLaplacianOperator(val, idx, train_x.shape[0], kernel.graphbandwidth, normalization, self_loops)  # kernel.laplacian(normalization)
+    laplacian_dense, _, degree_unorm_dense, _, degree_dense = graph_laplacian(idx, val, kernel.graphbandwidth, train_x.shape[0], normalization=normalization, self_loops=self_loops)
 
     test_mv(laplacian_dense, laplacian_sparse, train_y)
     test_mv_transpose(laplacian_dense, laplacian_sparse, train_y)

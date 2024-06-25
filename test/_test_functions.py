@@ -155,9 +155,9 @@ def test_outofsample(edge_value, edge_index, dense_eval, dense_evec, sparse_oper
     sparse_spectral_density *= sparse_evec.shape[0]
     sparse_evec_ext = sparse_spectral_density.sqrt()*sparse_operator.out_of_sample(sparse_evec, edge_value, edge_index)
 
-    print([round(elem, 5) for elem in dense_evec_ext[1, :10].tolist()])
-    print([round(elem, 5) for elem in sparse_evec_ext[1, :10].tolist()])
-    if [round(elem, 5) for elem in dense_evec_ext[1, :10].tolist()] == [round(elem, 5) for elem in sparse_evec_ext[1, :10].tolist()]:
+    print([round(elem, 5) for elem in dense_evec_ext[:10, 1].tolist()])
+    print([round(elem, 5) for elem in sparse_evec_ext[:10, 1].tolist()])
+    if [round(elem, 5) for elem in dense_evec_ext[:10, 1].tolist()] == [round(elem, 5) for elem in sparse_evec_ext[:10, 1].tolist()]:
         print(bcolors.OKGREEN + "Out of Sample Test: SUCCESS" + bcolors.ENDC)
     else:
         print(bcolors.FAIL + "Out of Sample Test: FAILED" + bcolors.ENDC)

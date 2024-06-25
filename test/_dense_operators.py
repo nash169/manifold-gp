@@ -4,9 +4,11 @@
 import torch
 
 
-def graph_laplacian(edge_index, edge_value, graphbandwidth, dimension, normalization="unnormalized"):
+def graph_laplacian(edge_index, edge_value, graphbandwidth, dimension, normalization="unnormalized", self_loops=True):
     adjacency_unorm = torch.sparse_coo_tensor(edge_index, edge_value.div(-4*graphbandwidth.square()).exp().squeeze(), (dimension, dimension)).to_dense()
-    adjacency_unorm = adjacency_unorm + adjacency_unorm.T + torch.eye(dimension).to(edge_value.device)
+    adjacency_unorm = adjacency_unorm + adjacency_unorm.T
+    if self_loops:
+        adjacency_unorm += torch.eye(dimension).to(edge_value.device)
     degree_unorm = adjacency_unorm.sum(dim=1)
 
     adjacency = torch.mm(degree_unorm.pow(-1).diag(), torch.mm(adjacency_unorm, degree_unorm.pow(-1).diag()))

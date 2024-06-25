@@ -29,6 +29,7 @@ class GraphLaplacianOperator(LinearOperator):
             operator_dimension: int,
             graphbandwidth: Tensor,
             normalization: Optional[str] = "randomwalk",  # "symmetric"
+            self_loops: Optional[bool] = True,
             transposed: Optional[bool] = False
     ):
         super().__init__(
@@ -37,6 +38,7 @@ class GraphLaplacianOperator(LinearOperator):
             operator_dimension=operator_dimension,
             graphbandwidth=graphbandwidth,
             normalization=normalization,
+            self_loops=self_loops,
             transposed=transposed
         )
         self.x = x
@@ -44,6 +46,7 @@ class GraphLaplacianOperator(LinearOperator):
         self.operator_dimension = operator_dimension
         self.graphbandwidth = graphbandwidth
         self.normalization = normalization
+        self.self_loops = self_loops
         self.transposed = transposed
 
     @property
@@ -56,9 +59,14 @@ class GraphLaplacianOperator(LinearOperator):
     @cached(name="degree_unnorm_mat")
     def degree_unnorm_mat(self: Float[LinearOperator, "N N"]) -> Float[torch.Tensor, "N"]:
         # print("degree_unnorm_mat")
-        return torch.ones(self.operator_dimension, device=self.x.device) \
-            .scatter_add_(0, self.idx[0, :], self.adjacency_unnorm_mat) \
-            .scatter_add_(0, self.idx[1, :], self.adjacency_unnorm_mat)
+        if self.self_loops:
+            return torch.ones(self.operator_dimension, device=self.x.device) \
+                .scatter_add_(0, self.idx[0, :], self.adjacency_unnorm_mat) \
+                .scatter_add_(0, self.idx[1, :], self.adjacency_unnorm_mat)
+        else:
+            return torch.zeros(self.operator_dimension, device=self.x.device) \
+                .scatter_add_(0, self.idx[0, :], self.adjacency_unnorm_mat) \
+                .scatter_add_(0, self.idx[1, :], self.adjacency_unnorm_mat)
 
     @property
     @cached(name="adjacency_mat")
@@ -70,15 +78,23 @@ class GraphLaplacianOperator(LinearOperator):
     @cached(name="degree_mat")
     def degree_mat(self: Float[LinearOperator, "N N"]) -> Float[torch.Tensor, "N"]:
         # print("degree_mat")
-        return self.degree_unnorm_mat.pow(-2) \
-            .scatter_add_(0, self.idx[0, :], self.adjacency_mat) \
-            .scatter_add(0, self.idx[1, :], self.adjacency_mat)
+        if self.self_loops:
+            return self.degree_unnorm_mat.pow(-2) \
+                .scatter_add_(0, self.idx[0, :], self.adjacency_mat) \
+                .scatter_add(0, self.idx[1, :], self.adjacency_mat)
+        else:
+            return torch.zeros(self.operator_dimension, device=self.x.device) \
+                .scatter_add_(0, self.idx[0, :], self.adjacency_mat) \
+                .scatter_add(0, self.idx[1, :], self.adjacency_mat)
 
     @property
     @cached(name="laplacian_diag")
     def laplacian_diag(self: Float[LinearOperator, "N N"]) -> Float[torch.Tensor, "N"]:
         # print("laplacian_diag")
-        return (1 - self.degree_unnorm_mat.pow(-2)*self.degree_mat.pow(-1)).div(self.graphbandwidth.square().squeeze())
+        if self.self_loops:
+            return (1 - self.degree_unnorm_mat.pow(-2)*self.degree_mat.pow(-1)).div(self.graphbandwidth.square().squeeze())
+        else:
+            return torch.ones(self.operator_dimension, device=self.x.device).div(self.graphbandwidth.square().squeeze())
 
     def _diagonal(self: LinearOperator) -> Tensor:
         return self.laplacian_diag
@@ -111,7 +127,7 @@ class GraphLaplacianOperator(LinearOperator):
         return torch.Size([self.operator_dimension, self.operator_dimension])
 
     def _transpose_nonbatch(self):
-        return GraphLaplacianOperator(self.x, self.idx, self.operator_dimension, self.graphbandwidth, self.normalization, True) if self.normalization == 'randomwalk' else self
+        return GraphLaplacianOperator(self.x, self.idx, self.operator_dimension, self.graphbandwidth, self.normalization, self.self_loops, True) if self.normalization == 'randomwalk' else self
 
     def diagonalization(self: LinearOperator, method: str | None = None, num_modes: int = None) -> Tuple[Tensor | LinearOperator | None]:
         with gpytorch.settings.max_root_decomposition_size(3*num_modes if num_modes is not None and 3*num_modes <= self.shape[0] else self.shape[0]):
@@ -122,7 +138,7 @@ class GraphLaplacianOperator(LinearOperator):
                     evals, evecs = evals[:num_modes], evecs[:, :num_modes]
                 return evals, evecs.to_dense()
             else:
-                evals, evecs = GraphLaplacianOperator(self.x, self.idx, self.operator_dimension, self.graphbandwidth, 'symmetric').diagonalization(method, num_modes)
+                evals, evecs = GraphLaplacianOperator(self.x, self.idx, self.operator_dimension, self.graphbandwidth, 'symmetric', self.self_loops).diagonalization(method, num_modes)
                 evecs *= self.degree_mat.pow(-0.5).view(-1, 1)
                 evecs = normalize(evecs, p=2, dim=0)
                 return evals, evecs
