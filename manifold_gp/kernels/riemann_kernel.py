@@ -19,6 +19,8 @@ from manifold_gp.priors.inverse_gamma_prior import InverseGammaPrior
 from ..utils import NearestNeighbors, bump_function
 from ..operators import GraphLaplacianOperator
 
+from torch.nn.functional import normalize
+
 
 class RiemannKernel(gpytorch.kernels.Kernel):
     has_lengthscale = True
@@ -122,6 +124,8 @@ class RiemannKernel(gpytorch.kernels.Kernel):
             self.eigval, self.eigvec = torch.linalg.eigh(torch.sparse_coo_tensor(idx, val, [self.laplacian_operator.operator_dimension, self.laplacian_operator.operator_dimension]).to_dense())
             self.eigval, self.eigvec = self.eigval[:self.num_modes], self.eigvec[:, :self.num_modes]
             self.eigval[0] = 0.0
+            self.eigvec *= self.laplacian_operator.degree_mat.pow(-0.5).view(-1, 1)
+            self.eigvec = normalize(self.eigvec, p=2, dim=0)
 
         return super().eval()
 
