@@ -25,7 +25,7 @@ def manifold_2D_dataset():
     return torch.from_numpy(nodes).float(), torch.from_numpy(truth).float()
 
 
-def rmnist_dataset(scaling=True, single_digit=False, regenerate=False):
+def rmnist_dataset(scaling=True, single_digit=False, regenerate=False, shuffle=False):
     if single_digit:
         if os.path.isfile(files('manifold_gp.data').joinpath('srmnist_train_x.npy')) and not regenerate:
             print("Loading SRMNIST")
@@ -40,13 +40,8 @@ def rmnist_dataset(scaling=True, single_digit=False, regenerate=False):
             # generate
             (train_samples, train_labels), (_, _) = tf.keras.datasets.mnist.load_data()
             digits_idx = [1, 8, 5, 7, 2, 0, 18, 15, 17, 4]
-            sampled_x, sampled_y, sampled_labels = rotate_mnist(train_samples[digits_idx], train_labels[digits_idx], num_samples=len(digits_idx), rots_sample=1000)
-            test_x, test_y, test_labels = rotate_mnist(train_samples[digits_idx], train_labels[digits_idx], num_samples=len(digits_idx), rots_sample=100)
-            # # shuffle
-            # rand_idx = np.random.permutation(sampled_x.shape[0])
-            # sampled_x, sampled_y, sampled_labels = sampled_x[rand_idx], sampled_y[rand_idx], sampled_labels[rand_idx]
-            # rand_idx = np.random.permutation(test_x.shape[0])
-            # test_x, test_y, test_labels = test_x[rand_idx], test_y[rand_idx], test_labels[rand_idx]
+            sampled_x, sampled_y, sampled_labels = rotate_mnist(train_samples[digits_idx], train_labels[digits_idx], num_samples=len(digits_idx), rots_sample=1000, shuffle=shuffle)
+            test_x, test_y, test_labels = rotate_mnist(train_samples[digits_idx], train_labels[digits_idx], num_samples=len(digits_idx), rots_sample=100, shuffle=shuffle)
             # save
             np.save(files('manifold_gp.data').joinpath('srmnist_train_x.npy'), sampled_x)
             np.save(files('manifold_gp.data').joinpath('srmnist_train_y.npy'), sampled_y)
@@ -67,13 +62,8 @@ def rmnist_dataset(scaling=True, single_digit=False, regenerate=False):
             from .rotate_mnist import rotate_mnist
             # generate
             (train_samples, train_labels), (test_samples, test_labels) = tf.keras.datasets.mnist.load_data()
-            sampled_x, sampled_y, sampled_labels = rotate_mnist(train_samples, train_labels, num_samples=100, rots_sample=100)
-            test_x, test_y, test_labels = rotate_mnist(test_samples, test_labels, num_samples=100, rots_sample=10)
-            # # shuffle
-            # rand_idx = np.random.permutation(sampled_x.shape[0])
-            # sampled_x, sampled_y, sampled_labels = sampled_x[rand_idx], sampled_y[rand_idx], sampled_labels[rand_idx]
-            # rand_idx = np.random.permutation(test_x.shape[0])
-            # test_x, test_y, test_labels = test_x[rand_idx], test_y[rand_idx], test_labels[rand_idx]
+            sampled_x, sampled_y, sampled_labels = rotate_mnist(train_samples, train_labels, num_samples=100, rots_sample=100, shuffle=shuffle)
+            test_x, test_y, test_labels = rotate_mnist(test_samples, test_labels, num_samples=100, rots_sample=10, shuffle=shuffle)
             # save
             np.save(files('manifold_gp.data').joinpath('rmnist_train_x.npy'), sampled_x)
             np.save(files('manifold_gp.data').joinpath('rmnist_train_y.npy'), sampled_y)

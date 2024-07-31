@@ -8,7 +8,7 @@ import numpy as np
 from scipy import ndimage
 
 
-def rotate_mnist(samples, labels, num_samples, rots_sample):
+def rotate_mnist(samples, labels, num_samples, rots_sample, shuffle=False):
     rotations = np.random.uniform(low=-45, high=45, size=(num_samples, rots_sample))
     sampled_x = np.zeros((num_samples*(rots_sample+1), 28, 28))
     sampled_y = np.zeros((num_samples*(rots_sample+1),))
@@ -23,9 +23,10 @@ def rotate_mnist(samples, labels, num_samples, rots_sample):
             sampled_x[i*(rots_sample+1) + j + 1, :, :] = ndimage.rotate(samples[i, :, :], rotations[i, j], reshape=False)
             sampled_y[i*(rots_sample+1) + j + 1] = rotations[i, j]
             sampled_labels[i*(rots_sample+1) + j + 1] = labels[i]
-
-    rand_idx = np.random.permutation(num_samples*(rots_sample+1))
-    sampled_x, sampled_y, sampled_labels = sampled_x[rand_idx], sampled_y[rand_idx], sampled_labels[rand_idx]
+    
+    if shuffle:
+        rand_idx = np.random.permutation(num_samples*(rots_sample+1))
+        sampled_x, sampled_y, sampled_labels = sampled_x[rand_idx], sampled_y[rand_idx], sampled_labels[rand_idx]
 
     return sampled_x, sampled_y, sampled_labels
 
