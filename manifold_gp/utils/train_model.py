@@ -20,10 +20,6 @@ def vanilla_train(model, optimizer, max_iter=100, max_cholesky=800, tolerance=1e
         output = model(model.train_inputs[0])
         with gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
             loss = -mll(output, model.train_targets)
-        loss.backward()
-        optimizer.step()
-        if scheduler is not None:
-            scheduler.step(loss)
 
         if verbose:
             msg = [f"Iteration: {epoch}, Loss: {loss.item():0.3f}, Lr: {scheduler.get_last_lr()[0] if scheduler is not None else optimizer.param_groups[0]['lr']}"]
@@ -34,6 +30,11 @@ def vanilla_train(model, optimizer, max_iter=100, max_cholesky=800, tolerance=1e
             if model.base_kernel.has_lengthscale:
                 msg += [f"Lengthscale: {model.base_kernel.lengthscale.item():0.3f}"]
             print(',\t'.join(msg))
+
+        loss.backward()
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step(loss)
 
         epoch += 1
         if abs(loss.item() - prev_loss) <= tolerance:
@@ -55,6 +56,7 @@ def manifold_informed_train(model, optimizer, max_iter=100, tolerance=1e-2, upda
 
     epoch = 0
     prev_loss = 1e6
+    num_data = model.train_targets.shape[0]
 
     while epoch <= max_iter:
         optimizer.zero_grad()
@@ -64,12 +66,14 @@ def manifold_informed_train(model, optimizer, max_iter=100, tolerance=1e-2, upda
         with gpytorch.settings.max_cholesky_size(max_cholesky), gpytorch.settings.cg_tolerance(cg_tolerance),  gpytorch.settings.max_cg_iterations(cg_max_iter):
             loss = 0.5 * sum([torch.dot(model.train_targets, precision_operator.matmul(model.train_targets.view(-1, 1)).squeeze()),
                               -precision_operator.inv_quad_logdet(logdet=True)[1],
-                              model.train_targets.shape[0] * math.log(2 * math.pi)])
-        # add log probs of priors on the (functions of) parameters
-        loss_ndim = loss.ndim
-        for _, module, prior, closure, _ in model.named_priors():
-            prior_term = prior.log_prob(closure(module))
-            loss.sub_(prior_term.view(*prior_term.shape[:loss_ndim], -1).sum(dim=-1))
+                              num_data * math.log(2 * math.pi)])
+            # add log probs of priors on the (functions of) parameters
+            loss_ndim = loss.ndim
+            for _, module, prior, closure, _ in model.named_priors():
+                prior_term = prior.log_prob(closure(module))
+                loss.sub_(prior_term.view(*prior_term.shape[:loss_ndim], -1).sum(dim=-1))
+            # scale by the amount of data
+            loss.div_(num_data)
 
         if verbose:
             msg = [f"Iteration: {epoch}, Loss: {loss.item():0.3f}, Lr: {scheduler.get_last_lr()[0] if scheduler is not None else optimizer.param_groups[0]['lr']}"]
