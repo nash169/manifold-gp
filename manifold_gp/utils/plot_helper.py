@@ -53,6 +53,7 @@ def colormap_diverging(colormap, vmin, vmax, center_color=np.array([1., 1., 1., 
 
     return cmap
 
+
 def colormap_left(colormap, left_color=np.array([1., 1., 1., 0.]), res=1000, step=0.1):
     # starting colormap
     cmap = plt.get_cmap(colormap)
@@ -76,11 +77,12 @@ def colormap_left(colormap, left_color=np.array([1., 1., 1., 0.]), res=1000, ste
     # reconstruct colormap
     for i in range(len(p)-1):
         rgb = np.append(rgb, np.linspace(np.array(cmap(p[i])), np.array(cmap(p[i+1])), w), axis=0)
-    
+
     # generate colormap
     cmap = mcolors.ListedColormap(rgb)
 
     return cmap
+
 
 def colormap_right(colormap, right_color=np.array([1., 1., 1., 0.]), res=1000, step=0.1):
     # starting colormap
@@ -105,11 +107,12 @@ def colormap_right(colormap, right_color=np.array([1., 1., 1., 0.]), res=1000, s
 
     # converge to white
     rgb = np.append(rgb, np.linspace(np.array(cmap(p[-1])), right_color, w + r), axis=0)
-    
+
     # generate colormap
     cmap = mcolors.ListedColormap(rgb)
 
     return cmap
+
 
 def colorbar(im, fig, ax, pos="left", size="5%", pad=0.2, ticks=None):
     # colorbar location
@@ -151,3 +154,24 @@ def beautify(fig, ax):
 
     # for c in im.collections:
     #     c.set_edgecolor("face")
+
+
+def plot_1D_mesh(fig, ax, vertices, edges, gradient):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import LineCollection
+
+    vertices = vertices.reshape(-1, 1, 2)
+    segments = np.concatenate([vertices[edges[:, 0]], vertices[edges[:, 1]]], axis=1)
+
+    norm = plt.Normalize(gradient.min(), gradient.max())
+    lc = LineCollection(segments, cmap='viridis', norm=norm)
+    lc.set_array(gradient)
+    lc.set_linewidth(5)
+    line = ax.add_collection(lc)
+
+    fig.colorbar(line, ax=ax)
+    ax.set_xlim(vertices[:, 0, 0].min(), vertices[:, 0, 0].max())
+    ax.set_ylim(vertices[:, 0, 1].min(), vertices[:, 0, 1].max())
+
+    ax.axis('equal')

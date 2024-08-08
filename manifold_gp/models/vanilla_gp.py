@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-import torch
 import gpytorch
 
 
@@ -16,32 +15,22 @@ class VanillaGP(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
-    def vanilla_train(self, lr=1e-1, iter=100, verbose=True):
-        self.train()
-        self.likelihood.train()
+    def posterior(self, x, noisy_posterior=False):
+        self.model_posterior = self.likelihood(self(x)) if noisy_posterior else self(x)
+        return self
 
-        # Deactivate optimization mean parameters
-        self.mean_module.raw_constant.requires_grad = False
+    @property
+    def base_kernel(self):
+        return self.covar_module.base_kernel if hasattr(self.covar_module, 'base_kernel') else self.covar_module
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+    @property
+    def posterior_mean(self):
+        return self.model_posterior.mean
 
-        for i in range(iter):
-            optimizer.zero_grad()
-            output = self(self.train_inputs[0])
-            loss = -mll(output, self.train_targets)
-            loss.backward()
+    @property
+    def posterior_covar(self):
+        return self.model_posterior.lazy_covariance_matrix.evaluate_kernel()
 
-            if verbose:
-                print(f"Iteration: {i}, Loss: {loss.item():0.3f}, Noise Variance: {self.likelihood.noise.sqrt().item():0.3f}", end='')
-                if hasattr(self.covar_module, 'outputscale'):
-                    print(f", Signal Variance: {self.covar_module.outputscale.sqrt().item():0.3f}", end='')
-                if hasattr(self.covar_module, 'base_kernel'):
-                    print(f", Lengthscale: {self.covar_module.base_kernel.lengthscale.item():0.3f}")
-                else:
-                    print(f", Lengthscale: {self.covar_module.lengthscale.item():0.3f}")
-
-            optimizer.step()
-
-        # Activate optimization mean parameters
-        self.mean_module.raw_constant.requires_grad = True
+    @property
+    def posterior_stddev(self):
+        return self.model_posterior.stddev

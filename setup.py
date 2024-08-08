@@ -8,7 +8,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="manifold-gp",
-    version="1.0.0",
+    version="1.1.0",
     author="Bernardo Fichera",
     author_email="bernardo.fichera@gmail.com",
     description="Manifold Informed Gaussian Process.",
@@ -24,20 +24,26 @@ setup(
     ],
     python_requires='>=3.6',
     install_requires=[
-        "numpy",                # math
-        "matplotlib",           # plotting
-        "torch",                # net framework
+        "torch",
+        "torch-scatter",
+        "torch-sparse",
+        "faiss-gpu",
+        "gpytorch"
     ],
     extras_require={
         "pytorch": [
-            "torchvision",      # net framework GPU
-            "tensorboard"       # visualizations
+            "numpy",
+            "matplotlib",
+            "torchvision",
+            "torchaudio",
+            "tensorflow",
+            "mayavi"
         ],
         "dev": [
-            "pylint",           # python linter
+            "pylint",
         ]
     },
     package_data={
-        "manifold_gp.data": ["*.msh", "*.stl", "*.csv"],
+        "manifold_gp.data": ["*.msh", "*.stl", "*.csv", "*.npy"],
     }
 )
